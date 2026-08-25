@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">RWmiao</string>
+    <string name="module_description">RWmiao module for Rusted Warfare</string>
+    <string name="module_info">RWmiao\n\nv%1$s</string>
+</resources>

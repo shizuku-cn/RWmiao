@@ -1,0 +1,147 @@
+package com.shizuku.rwmiao.module;
+
+import android.graphics.PointF;
+
+import java.lang.reflect.Method;
+
+import io.github.libxposed.api.XposedInterface;
+
+import static com.shizuku.rwmiao.config.SettingsContract.KEY_FACTORY_EXIT_THROUGH;
+
+/**
+ * Sends a native move command for a unit immediately after factory completion.
+ * The target factory's native rally point is used as-is.
+ */
+final class FactoryExitThrough {
+    private static final String TAG = "RWmiao";
+
+    private final RWmiaoModule host;
+    private final ClassLoader loader;
+    private Method completeUnit;
+    private Class<?> queueItemClass;
+    private Class<?> factoryClass;
+    private Class<?> unitClass;
+    private Class<?> buildingClass;
+    private Class<?> teamClass;
+    private Class<?> commandClass;
+    private Class<?> commandQueueClass;
+    private Method createCommand;
+    private Method setMoveTarget;
+    private Method addUnit;
+    private XposedInterface.HookHandle hook;
+
+    FactoryExitThrough(RWmiaoModule host, ClassLoader loader) {
+        this.host = host;
+        this.loader = loader;
+    }
+
+    void install() throws Throwable {
+        Class<?> queueClass = loader.loadClass(host.target("game.units.d.r"));
+        queueItemClass = loader.loadClass(host.target("game.units.d.q"));
+        factoryClass = loader.loadClass(host.target("game.units.d.s"));
+        unitClass = loader.loadClass(host.target("game.units.bp"));
+        buildingClass = loader.loadClass(host.target("game.units.d.f"));
+        teamClass = loader.loadClass(host.target("game.p"));
+        commandClass = loader.loadClass(host.target("gameFramework.e"));
+        commandQueueClass = loader.loadClass(host.target("gameFramework.c"));
+
+        completeUnit = host.findCompatibleMethod(
+                queueClass, "a", queueItemClass, float.class, boolean.class, float.class);
+        createCommand = exactMethod(commandQueueClass, "a", teamClass);
+        setMoveTarget = exactMethod(commandClass, "a", float.class, float.class);
+        addUnit = exactMethod(commandClass, "a", unitClass);
+        if (completeUnit == null || createCommand == null
+                || setMoveTarget == null || addUnit == null) {
+            throw new NoSuchMethodException("factory completion or native move command");
+        }
+        refreshSettings();
+    }
+
+    synchronized void refreshSettings() {
+        if (!host.selectionActionEnabled(KEY_FACTORY_EXIT_THROUGH)) {
+            unhook();
+            return;
+        }
+        if (hook != null) return;
+        hook = host.hookExecutable(completeUnit, chain -> {
+            Object result = chain.proceed();
+            try {
+                dispatchToRally(chain.getThisObject(), result);
+            } catch (Throwable t) {
+                host.log(5, TAG, "Factory rally move skipped", t);
+            }
+            return result;
+        });
+    }
+
+    private void dispatchToRally(Object productionQueue, Object result) throws Throwable {
+        if (productionQueue == null || result == null) return;
+        // JADX displays the queue's original field `a` as `f502a` to avoid a
+        // name collision in decompiled Java. Reflection must use the DEX name.
+        Object producer = host.findFieldValue(productionQueue, "a");
+        if (producer == null || !factoryClass.isInstance(producer)) return;
+        Object rallyValue = host.findFieldValue(productionQueue, "b");
+        if (!(rallyValue instanceof PointF)) return;
+        PointF rally = (PointF) rallyValue;
+        if (!Float.isFinite(rally.x) || !Float.isFinite(rally.y)) return;
+
+        // Only the local player's factory is allowed to emit the extra command.
+        // Other clients receive the same native command through multiplayer sync.
+        Object engine = host.findEngine(loader);
+        Object localTeam = host.findField(engine.getClass(), "bp").get(engine);
+        Object producerTeam = host.findFieldValue(producer, "bZ");
+        if (localTeam == null || producerTeam != localTeam) return;
+
+        // A factory can also complete a building/special object. Only units get
+        // the exit-through behavior requested by this feature.
+        if (!unitClass.isInstance(result) || buildingClass.isInstance(result)) return;
+        Object command = createCommand.invoke(host.findField(engine.getClass(), "cc").get(engine),
+                localTeam);
+        if (command == null) return;
+        setBoolean(command, "e", false);
+        setBoolean(command, "h", true);
+        setMoveTarget.invoke(command, rally.x, rally.y);
+        addUnit.invoke(command, result);
+    }
+
+    private void setBoolean(Object object, String name, boolean value) throws Throwable {
+        java.lang.reflect.Field field = host.findField(object.getClass(), name);
+        if (field.getType() == boolean.class) field.setBoolean(object, value);
+    }
+
+    private Method exactMethod(Class<?> type, String name, Class<?>... parameters) {
+        Class<?> current = type;
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (!method.getName().equals(name)
+                        || method.getParameterCount() != parameters.length) continue;
+                Class<?>[] actual = method.getParameterTypes();
+                boolean match = true;
+                for (int i = 0; i < actual.length; i++) {
+                    if (actual[i] != parameters[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    method.setAccessible(true);
+                    return method;
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private void unhook() {
+        XposedInterface.HookHandle current = hook;
+        hook = null;
+        if (current != null) {
+            try {
+                current.unhook();
+            } catch (Throwable t) {
+                host.log(5, TAG, "Failed to unhook factory rally move", t);
+            }
+        }
+    }
+}

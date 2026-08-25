@@ -1,0 +1,1 @@
+package com.corrodinggames.rts.game.units; public enum cg { A,B,C,D,E,F,G,H }

@@ -1,0 +1,11 @@
+package com.shizuku.rwmiao.ui.support
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+
+@Composable
+internal fun PlaceholderPage() {
+    Box(Modifier.fillMaxSize())
+}

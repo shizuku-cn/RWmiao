@@ -1,0 +1,5 @@
+<resources>
+    <!-- Static dark-theme fallback for launchers below Android 12. -->
+    <color name="icon_background">#381E72</color>
+    <color name="icon_foreground">#D0BCFF</color>
+</resources>

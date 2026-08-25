@@ -1,0 +1,5 @@
+<resources>
+    <!-- Static Material 3 fallback for launchers below Android 12. -->
+    <color name="icon_background">#EADDFF</color>
+    <color name="icon_foreground">#6750A4</color>
+</resources>

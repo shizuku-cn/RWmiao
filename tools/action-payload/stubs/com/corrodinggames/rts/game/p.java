@@ -1,0 +1,1 @@
+package com.corrodinggames.rts.game; public class p { public boolean b(p other){return false;} }

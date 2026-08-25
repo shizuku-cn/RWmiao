@@ -1,0 +1,19 @@
+# Gradle / Android
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
+
+# Local caches and logs
+gradle-home/
+gradle-user/
+.gradle-local/
+tmp-api-aar/
+tmp-javac-check/
+*.log
+
+# Generated packages
+*.apk
+*.aab
+tools/action-payload/.build/

@@ -1,0 +1,12 @@
+<resources>
+    <color name="icon_light_background">#EADDFF</color>
+    <color name="icon_light_foreground">#6750A4</color>
+    <color name="icon_dark_background">#381E72</color>
+    <color name="icon_dark_foreground">#D0BCFF</color>
+    <!-- Used when the module page disables dynamic color. These deliberately
+         have no values-v31 override. -->
+    <color name="icon_static_light_background">#EADDFF</color>
+    <color name="icon_static_light_foreground">#6750A4</color>
+    <color name="icon_static_dark_background">#381E72</color>
+    <color name="icon_static_dark_foreground">#D0BCFF</color>
+</resources>
