@@ -131,5 +131,14 @@ internal fun AuxiliaryPage(
                 ) { onState(state.copy(factoryExitThrough = it)) }
             }
         }
+        item {
+            SectionCard(compact = true) {
+                SwitchSetting(
+                    "自由框选",
+                    "在界面右侧添加按钮,自由框选模式下手势画封闭图形后框选其中单位",
+                    state.freeSelection
+                ) { onState(state.copy(freeSelection = it)) }
+            }
+        }
     }
 }

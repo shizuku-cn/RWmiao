@@ -5,6 +5,7 @@ import android.graphics.Paint;
 import android.graphics.Typeface;
 
 import com.shizuku.rwmiao.module.RWmiaoModule;
+import com.shizuku.rwmiao.module.support.GameFrameDispatcher;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -14,7 +15,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 
-import io.github.libxposed.api.XposedInterface;
 
 import static com.shizuku.rwmiao.config.SettingsContract.*;
 
@@ -55,7 +55,7 @@ public final class Drawing {
     private RendererAccess rendererAccess;
     private Object relationPlayer;
     private Method drawMethod;
-    private XposedInterface.HookHandle drawHook;
+    private GameFrameDispatcher.Registration drawRegistration;
 
     public Drawing(RWmiaoModule host, ClassLoader loader) {
         this.host = host;
@@ -72,24 +72,21 @@ public final class Drawing {
     }
 
     private synchronized void ensureHook() {
-        if (drawHook != null || drawMethod == null) return;
-        drawHook = host.hookExecutable(drawMethod, chain -> {
-            Object result = chain.proceed();
-            try {
-                drawFrame();
-            } catch (Throwable t) {
-                host.log(6, TAG, "Native drawing failed", t);
-            }
-            return result;
-        });
+        if (drawRegistration != null || drawMethod == null) return;
+        drawRegistration = host.frameDispatcher().register(drawMethod,
+                (renderer, delta) -> {
+                    try {
+                        drawFrame();
+                    } catch (Throwable t) {
+                        host.log(6, TAG, "Native drawing failed", t);
+                    }
+                });
     }
 
     private synchronized void disableHook() {
-        XposedInterface.HookHandle hook = drawHook;
-        drawHook = null;
-        if (hook != null) {
-            try { hook.unhook(); } catch (Throwable ignored) { }
-        }
+        GameFrameDispatcher.Registration registration = drawRegistration;
+        drawRegistration = null;
+        if (registration != null) registration.close();
     }
 
     public void refreshSettings() {

@@ -21,7 +21,7 @@ android {
         // Native formation-strip implementation: extra slots use the game's
         // own renderer and input path instead of an Android overlay.
         versionCode 1
-        versionName '0.12-s6-fix8'
+        versionName '0.12-b1'
     }
 
     signingConfigs {

@@ -47,7 +47,8 @@ $RequiredDexSymbols = @(
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoSmartPathAction;'",
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoScriptsAction;'",
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoMotherRallyAction;'",
-    'RWMiaoBridge.maybeAdd:(Ljava/util/ArrayList;IZZZZZZZ)Ljava/util/ArrayList;'
+    "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoFreeSelectionAction;'",
+    'RWMiaoBridge.maybeAdd:(Ljava/util/ArrayList;IZZZZZZZZ)Ljava/util/ArrayList;'
 )
 foreach ($Symbol in $RequiredDexSymbols) {
     if (-not $DumpText.Contains($Symbol)) {

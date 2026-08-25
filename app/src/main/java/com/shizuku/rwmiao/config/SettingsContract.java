@@ -34,6 +34,7 @@ public final class SettingsContract {
     public static final String KEY_REINFORCE_ON = "reinforceOn";
     public static final String KEY_REINFORCE_WEIGHT_MODE = "weightMode";
     public static final String KEY_SHOW_REINFORCE_PANEL = "showReinforcePanel";
+    public static final String KEY_FREE_SELECTION = "freeSelection";
     public static final String KEY_SEGMENT_COMMAND = "segmentCommand";
     public static final String KEY_SMART_PATHING = "smartPathing";
     public static final String KEY_SHOW_SMART_PATH_ACTION = "showSmartPathAction";

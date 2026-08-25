@@ -88,6 +88,7 @@ class SettingsPage(
             .putBoolean(KEY_REINFORCE_ON, state.reinforceOn)
             .putBoolean(KEY_REINFORCE_WEIGHT_MODE, state.reinforceWeightMode)
             .putBoolean(KEY_SHOW_REINFORCE_PANEL, state.showReinforcePanel)
+            .putBoolean(KEY_FREE_SELECTION, state.freeSelection)
             .putBoolean(KEY_SEGMENT_COMMAND, state.segmentCommand)
             .putBoolean(KEY_SMART_PATHING, state.smartPathing)
             .putBoolean(KEY_SHOW_SMART_PATH_ACTION, state.showSmartPathAction)
@@ -174,6 +175,7 @@ internal data class SettingsState(
     val reinforceOn: Boolean,
     val reinforceWeightMode: Boolean,
     val showReinforcePanel: Boolean,
+    val freeSelection: Boolean,
     val segmentCommand: Boolean,
     val smartPathing: Boolean,
     val smartPathingThreshold: Int,
@@ -207,6 +209,7 @@ internal data class SettingsState(
                 reinforceOn = prefs.getBoolean(KEY_REINFORCE_ON, false),
                 reinforceWeightMode = prefs.getBoolean(KEY_REINFORCE_WEIGHT_MODE, false),
                 showReinforcePanel = prefs.getBoolean(KEY_SHOW_REINFORCE_PANEL, true),
+                freeSelection = prefs.getBoolean(KEY_FREE_SELECTION, false),
                 segmentCommand = prefs.getBoolean(KEY_SEGMENT_COMMAND, false),
                 smartPathing = prefs.getBoolean(KEY_SMART_PATHING, false),
                 smartPathingThreshold = prefs.getInt(

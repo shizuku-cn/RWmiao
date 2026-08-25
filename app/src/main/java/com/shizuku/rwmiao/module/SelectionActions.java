@@ -16,6 +16,7 @@ import java.util.zip.ZipFile;
 
 import io.github.libxposed.api.XposedInterface;
 import com.shizuku.rwmiao.module.script.ScriptManager;
+import com.shizuku.rwmiao.module.freeselection.FreeSelection;
 
 import static com.shizuku.rwmiao.config.SettingsContract.*;
 
@@ -32,6 +33,7 @@ final class SelectionActions {
     private Field actionSegmentTitle;
     private Field actionSmartPathTitle;
     private Field actionScriptsTitle;
+    private Field actionFreeSelectionTitle;
     private boolean selectionHookLogged;
     private int actionStateTick = Integer.MIN_VALUE;
     private boolean cachedShowRange;
@@ -41,6 +43,7 @@ final class SelectionActions {
     private boolean cachedShowSmartPath;
     private boolean cachedShowScripts;
     private boolean cachedShowMotherRally;
+    private boolean cachedShowFreeSelection;
     private boolean cachedDrawable;
     private XposedInterface.HookHandle selectionHook;
 
@@ -60,13 +63,15 @@ final class SelectionActions {
         SmartPathing smart = host.smartPathing();
         ScriptManager scripts = host.scriptManager();
         MotherRally motherRally = host.motherRallyFeature();
+        FreeSelection freeSelection = host.freeSelectionFeature();
         boolean needed = host.selectionActionEnabled(KEY_SHOW_RANGE_ACTION)
                 || host.selectionActionEnabled(KEY_SHOW_LINE_ACTION)
                 || reinforce != null && reinforce.automationEnabled() && reinforce.panelEnabled()
                 || segment != null && segment.isEnabled()
                 || smart != null && host.selectionActionEnabled(KEY_SHOW_SMART_PATH_ACTION)
                 || scripts != null && scripts.masterEnabled() && scripts.hasEnabledScripts()
-                || motherRally != null && motherRally.enabled();
+                || motherRally != null && motherRally.enabled()
+                || freeSelection != null && freeSelection.enabled();
         if (!needed) {
             if (selectionHook != null) selectionHook.unhook();
             selectionHook = null;
@@ -92,6 +97,7 @@ private void hookSelectionActions(ClassLoader loader) throws Throwable {
         SmartPathing smartPath = host.smartPathing();
         ScriptManager scripts = host.scriptManager();
         MotherRally motherRally = host.motherRallyFeature();
+        FreeSelection freeSelection = host.freeSelectionFeature();
         refreshActionState(reinforce);
         boolean showRange = cachedShowRange;
         boolean showLine = cachedShowLine;
@@ -107,14 +113,16 @@ private void hookSelectionActions(ClassLoader loader) throws Throwable {
                 && scripts.hasApplicableUnit(chain.getArg(0));
         boolean showMotherRally = motherRally != null && cachedShowMotherRally
                 && motherRally.isApplicable(chain.getArg(0));
+        boolean showFreeSelection = freeSelection != null && cachedShowFreeSelection
+                && chain.getArg(0) == null;
         boolean drawable = cachedDrawable;
         if ((!showRange && !showLine && !showReinforce && !showSegment && !showSmartPath
-                && !showScripts && !showMotherRally)
+                && !showScripts && !showMotherRally && !showFreeSelection)
                 || (showRange || showLine) && !drawable) {
             if (!showReinforce && !showSegment && !showSmartPath && !showScripts
-                    && !showMotherRally) return result;
-            // The reinforcement entry belongs to the same no-selection
-            // action row as Team Chat and Map Ping, including single-player.
+                    && !showMotherRally && !showFreeSelection) return result;
+            // These no-selection entries share the native Team Chat and Map
+            // Ping row, including single-player. They are not unit actions.
         }
         try {
             if (!ensureActionPayload(loader)) return result;
@@ -127,10 +135,14 @@ private void hookSelectionActions(ClassLoader loader) throws Throwable {
                 actionSmartPathTitle.set(null, smartPath.titleForSelection());
             }
             if (actionScriptsTitle != null) actionScriptsTitle.set(null, "脚本管理");
+            if (actionFreeSelectionTitle != null && freeSelection != null) {
+                actionFreeSelectionTitle.set(null, freeSelection.titleForSelection());
+            }
             actionMaybeAdd.invoke(null, result,
                     host.findSelectionActionInsertIndex((ArrayList<?>) result),
                     showRange && drawable, showLine && drawable, showReinforce,
-                    showSegment, showSmartPath, showScripts, showMotherRally);
+                    showSegment, showSmartPath, showScripts, showMotherRally,
+                    showFreeSelection);
             if (!selectionHookLogged) {
                 selectionHookLogged = true;
                 host.log(4, TAG, "Selection actions appended: size=" + ((ArrayList<?>) result).size()
@@ -138,7 +150,8 @@ private void hookSelectionActions(ClassLoader loader) throws Throwable {
                         + ", line=" + (showLine && drawable)
                         + ", reinforce=" + showReinforce
                         + ", segment=" + showSegment
-                        + ", motherRally=" + showMotherRally);
+                        + ", motherRally=" + showMotherRally
+                        + ", freeSelection=" + showFreeSelection);
             }
         } catch (Throwable t) {
             host.log(6, TAG, "Failed to append selection actions", t);
@@ -160,6 +173,8 @@ private void refreshActionState(AutoReinforce reinforce) {
     cachedShowScripts = scripts != null && scripts.masterEnabled() && scripts.hasEnabledScripts();
     MotherRally motherRally = host.motherRallyFeature();
     cachedShowMotherRally = motherRally != null && motherRally.enabled();
+    FreeSelection freeSelection = host.freeSelectionFeature();
+    cachedShowFreeSelection = freeSelection != null && freeSelection.enabled();
     cachedDrawable = (cachedShowRange || cachedShowLine) && host.hasDrawableSelection(loader);
     actionStateTick = tick;
 }
@@ -203,14 +218,17 @@ private synchronized boolean ensureActionPayload(ClassLoader loader) {
             if (scripts != null && activity != null) activity.runOnUiThread(
                     () -> scripts.openUnitPanel(activity, unit));
         });
+        bridge.getField("freeSelectionToggle").set(null, (Runnable) RWmiaoModule::toggleFreeSelection);
         actionRangeTitle = bridge.getField("rangeTitle");
         actionLineTitle = bridge.getField("lineTitle");
         actionSegmentTitle = bridge.getField("segmentTitle");
         actionSmartPathTitle = bridge.getField("smartPathTitle");
         actionScriptsTitle = bridge.getField("scriptsTitle");
+        actionFreeSelectionTitle = bridge.getField("freeSelectionTitle");
         actionMaybeAdd = bridge.getDeclaredMethod(
                 "maybeAdd", ArrayList.class, int.class, boolean.class, boolean.class,
-                boolean.class, boolean.class, boolean.class, boolean.class, boolean.class);
+                boolean.class, boolean.class, boolean.class, boolean.class, boolean.class,
+                boolean.class);
         Class<?> targetAction = loader.loadClass(host.target("game.units.a.s"));
         Class<?> drawAction = actionLoader.loadClass(
                 "com.shizuku.rwmiao.payload.RWMiaoDrawAction");
@@ -224,12 +242,15 @@ private synchronized boolean ensureActionPayload(ClassLoader loader) {
                 "com.shizuku.rwmiao.payload.RWMiaoScriptsAction");
         Class<?> motherRallyAction = actionLoader.loadClass(
                 "com.shizuku.rwmiao.payload.RWMiaoMotherRallyAction");
+        Class<?> freeSelectionAction = actionLoader.loadClass(
+                "com.shizuku.rwmiao.payload.RWMiaoFreeSelectionAction");
         if (!targetAction.isAssignableFrom(drawAction)
                 || !targetAction.isAssignableFrom(lineAction)
                 || !targetAction.isAssignableFrom(segmentAction)
                 || !targetAction.isAssignableFrom(smartPathAction)
                 || !targetAction.isAssignableFrom(scriptsAction)
-                || !targetAction.isAssignableFrom(motherRallyAction)) {
+                || !targetAction.isAssignableFrom(motherRallyAction)
+                || !targetAction.isAssignableFrom(freeSelectionAction)) {
             throw new LinkageError("selection payload action type mismatch for " + host.targetPrefix());
         }
         return true;
@@ -241,6 +262,7 @@ private synchronized boolean ensureActionPayload(ClassLoader loader) {
         actionSegmentTitle = null;
         actionSmartPathTitle = null;
         actionScriptsTitle = null;
+        actionFreeSelectionTitle = null;
         host.log(6, TAG, "Failed to load selection action payload", t);
         return false;
     }

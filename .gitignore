@@ -9,11 +9,21 @@ local.properties
 gradle-home/
 gradle-user/
 .gradle-local/
+.gradle-user/
+.kotlin/
 tmp-api-aar/
 tmp-javac-check/
+.tmp/
+classes.jar
+caches/
+daemon/
+jdks/
+null/
+work/
 *.log
 
 # Generated packages
 *.apk
 *.aab
+发布/
 tools/action-payload/.build/

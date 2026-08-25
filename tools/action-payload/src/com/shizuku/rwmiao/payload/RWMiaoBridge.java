@@ -9,17 +9,19 @@ public final class RWMiaoBridge {
     public static Runnable reinforceOpen;
     public static Runnable segmentToggle;
     public static Runnable smartPathToggle;
+    public static Runnable freeSelectionToggle;
     public static Consumer<Object> scriptsOpen;
     public static String rangeTitle = "绘制范围";
     public static String lineTitle = "指示索敌";
     public static String segmentTitle = "分段指令";
     public static String smartPathTitle = "关闭智寻";
     public static String scriptsTitle = "脚本管理";
+    public static String freeSelectionTitle = "自由框选";
     private RWMiaoBridge() {}
     public static ArrayList maybeAdd(ArrayList actions, int insertionIndex,
                                      boolean addRange, boolean addLine, boolean addReinforce,
                                      boolean addSegment, boolean addSmartPath, boolean addScripts,
-                                     boolean addMotherRally) {
+                                     boolean addMotherRally, boolean addFreeSelection) {
         if (actions == null) return actions;
         int index = insertionIndex < 0 || insertionIndex > actions.size()
                 ? actions.size() : insertionIndex;
@@ -47,6 +49,9 @@ public final class RWMiaoBridge {
             // action in the unit definition.
             actions.add(index, RWMiaoMotherRallyAction.INST);
         }
+        if (addFreeSelection && !actions.contains(RWMiaoFreeSelectionAction.INST)) {
+            actions.add(index, RWMiaoFreeSelectionAction.INST);
+        }
         return actions;
     }
 
@@ -61,6 +66,9 @@ public final class RWMiaoBridge {
     public static void openReinforce() { if (reinforceOpen != null) reinforceOpen.run(); }
     public static void toggleSegment() { if (segmentToggle != null) segmentToggle.run(); }
     public static void toggleSmartPath() { if (smartPathToggle != null) smartPathToggle.run(); }
+    public static void toggleFreeSelection() {
+        if (freeSelectionToggle != null) freeSelectionToggle.run();
+    }
     public static void openScripts(Object unit) { if (scriptsOpen != null) scriptsOpen.accept(unit); }
     public static String rangeTitle() { return rangeTitle == null ? "绘制范围" : rangeTitle; }
     public static String lineTitle() { return lineTitle == null ? "指示索敌" : lineTitle; }
@@ -69,4 +77,7 @@ public final class RWMiaoBridge {
         return smartPathTitle == null ? "关闭智寻" : smartPathTitle;
     }
     public static String scriptsTitle() { return scriptsTitle == null ? "脚本管理" : scriptsTitle; }
+    public static String freeSelectionTitle() {
+        return freeSelectionTitle == null ? "自由框选" : freeSelectionTitle;
+    }
 }

@@ -14,6 +14,7 @@ import android.widget.Button;
 
 import com.shizuku.rwmiao.ui.main.SettingsPage;
 import com.shizuku.rwmiao.module.drawing.Drawing;
+import com.shizuku.rwmiao.module.freeselection.FreeSelection;
 import com.shizuku.rwmiao.module.support.GameFrameDispatcher;
 import com.shizuku.rwmiao.module.support.GameTickDispatcher;
 import com.shizuku.rwmiao.module.script.ScriptManager;
@@ -55,6 +56,7 @@ public final class RWmiaoModule extends XposedModule {
     private volatile Activity lastActivity;
     private AutoReinforce reinforceFeature;
     private Drawing drawingFeature;
+    private FreeSelection freeSelectionFeature;
     private NoFog noFogFeature;
     private ViewAll viewAllFeature;
     private EconomicPanel economicPanelFeature;
@@ -165,6 +167,12 @@ public final class RWmiaoModule extends XposedModule {
                 drawingFeature.install();
             } catch (Throwable t) {
                 log(6, TAG, "Failed to install drawing overlay hook", t);
+            }
+            try {
+                freeSelectionFeature = new FreeSelection(this, loader);
+                freeSelectionFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to install free-selection hooks", t);
             }
             try {
                 segmentCommands = new SegmentCommands(this, loader);
@@ -348,6 +356,10 @@ public final class RWmiaoModule extends XposedModule {
 
     AutoReinforce reinforceFeature() {
         return reinforceFeature;
+    }
+
+    FreeSelection freeSelectionFeature() {
+        return freeSelectionFeature;
     }
 
     MotherRally motherRallyFeature() {
@@ -575,6 +587,19 @@ public final class RWmiaoModule extends XposedModule {
         RWmiaoModule current = instance;
         return current != null && current.drawingFeature != null
                 && current.drawingFeature.allSelectedEnabled(false) ? "取消指示" : "指示索敌";
+    }
+
+    public static void toggleFreeSelection() {
+        RWmiaoModule current = instance;
+        if (current != null && current.freeSelectionFeature != null) {
+            current.freeSelectionFeature.toggleMode();
+        }
+    }
+
+    public static String freeSelectionTitle() {
+        RWmiaoModule current = instance;
+        return current == null || current.freeSelectionFeature == null
+                ? "自由框选" : current.freeSelectionFeature.titleForSelection();
     }
 
     /** Select the native statistics panel data source without changing game
@@ -929,6 +954,8 @@ public final class RWmiaoModule extends XposedModule {
         catch (Throwable t) { log(5, TAG, "smart-path hook refresh failed", t); }
         try { if (drawingFeature != null) drawingFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "drawing hook refresh failed", t); }
+        try { if (freeSelectionFeature != null) freeSelectionFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "free-selection hook refresh failed", t); }
         try { if (peekFeature != null) peekFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "peek hook refresh failed", t); }
         try { if (scriptManager != null) scriptManager.refreshSettings(); }
