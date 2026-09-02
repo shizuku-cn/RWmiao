@@ -16,20 +16,25 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
-/** One isolated Lua VM. Lua owns all decisions; Java only publishes snapshots and commands. */
 final class LuaProgram {
     private static final int MAX_CALLBACKS = 32;
     private static final int MAX_INSTRUCTIONS = 250_000;
     private static final String[] DATA_GROUPS = {"identity","team","position","health","movement","combat","weapons","orders","pathing","transport","build","production","actions","abilities","damage","selection","map","resources","projectiles","environment","catalog","all"};
-    private static final String[] UNIT_FIELDS = {"id","type_id","type_name","building","orderable","team_id","team_name","relation","relation_name","x","y","height","position","heading","radius","health","max_health","health_ratio","health_missing","shield","max_shield","shield_ratio","shield_missing","combined_health_ratio","max_move_speed","real_speed","velocity_x","velocity_y","acceleration","deceleration","turn_speed","moving","movement_type","path_state","path_pending","attack_range","weapon_count","weapons","target_id","current_order","order_target_id","order_x","order_y","waypoint_count","carrier_id","attached","transport_capacity","loaded_unit_ids","build_progress","factory","queue_size","production_items","actions","abilities","buildable_types","last_damaged_tick","visible_to_local","fogged_to_local","explored_to_local","selected","dead","deleted","idle","group_id"};
+    private static final String[] UNIT_FIELDS = {"id","type_id","type_name","building","orderable","team_id","team_name","relation","relation_name","x","y","height","position","heading","radius","health","max_health","health_ratio","health_missing","shield","max_shield","shield_ratio","shield_missing","combined_health_ratio","max_move_speed","real_speed","velocity_x","velocity_y","acceleration","deceleration","turn_speed","moving","movement_type","path_state","path_pending","attack_range","weapon_count","weapons","target_id","current_order","order_target_id","order_x","order_y","waypoint_count","carrier_id","attached","transport_capacity","loaded_unit_ids","build_progress","factory","queue_size","production_items","actions","action_details","abilities","buildable_types","last_damaged_tick","last_damage_amount","last_damage_source_id","visible_to_local","fogged_to_local","explored_to_local","selected","dead","deleted","idle","group_id"};
+    private static final String[] MAP_FIELDS = {"tile_x","tile_y","in_bounds","available","tile_id","tile_name","water","water_bridge","lava","cliff","resource_pool","large_cliff_or_trees","blocks_buildings","land_blocked","visible","fogged","explored","unexplored","movement_type","grid_x","grid_y","width","height","world_to_grid","terrain_cost","building_cost","object_cost","terrain_blocked","building_blocked","object_blocked","passable","clearance_radius","clearance_passable"};
     private static final String[] COMMANDS = {"move","attack_move","attack","patrol","guard","repair","reclaim","enter","load","build","action","stop"};
     private static final String[] LIFECYCLE = {"finish","exit"};
     final Globals globals;
+    final LuaTable rw;
     final ScriptDefinition definition;
-    final BudgetDebugLib budget;
+    final LuaInstructionLimiter budget;
     private final ArrayList<TickHandler> ticks;
+    private final AtomicReference<Set<String>> runtimeCapabilities;
     private int consecutiveErrors;
 
     private static final class TickHandler {
@@ -39,17 +44,17 @@ final class LuaProgram {
         TickHandler(int interval, LuaValue function) { this.interval = interval; this.function = function; }
     }
 
-    private LuaProgram(Globals globals, ScriptDefinition definition, ArrayList<TickHandler> ticks,
-                       BudgetDebugLib budget) {
-        this.globals = globals; this.definition = definition; this.ticks = ticks; this.budget = budget;
+    private LuaProgram(Globals globals, LuaTable rw, ScriptDefinition definition, ArrayList<TickHandler> ticks,
+                       LuaInstructionLimiter budget, AtomicReference<Set<String>> runtimeCapabilities) {
+        this.globals = globals; this.rw = rw; this.definition = definition; this.ticks = ticks; this.budget = budget; this.runtimeCapabilities=runtimeCapabilities;
     }
 
     static LuaProgram compile(String source, String sourceName) throws IOException {
         if (source == null || source.trim().isEmpty()) throw new IOException("空脚本");
         Globals globals = JsePlatform.standardGlobals();
-        BudgetDebugLib budget = new BudgetDebugLib();
+        AtomicReference<Set<String>> runtimeCapabilities=new AtomicReference<>(Collections.emptySet());
+        LuaInstructionLimiter budget = new LuaInstructionLimiter();
         globals.load(budget);
-        // Remove all host escape surfaces. Scripts retain normal Lua tables, strings and math.
         for (String name : new String[]{"luajava", "io", "os", "package", "debug", "require",
                 "dofile", "loadfile", "load"}) globals.set(name, LuaValue.NIL);
         final ScriptDefinition[] metadata = new ScriptDefinition[1];
@@ -105,6 +110,7 @@ final class LuaProgram {
         rw.set("centroid",new OneArgFunction(){@Override public LuaValue call(LuaValue units){double x=0,y=0;int n=0;if(units.istable())for(int i=1;!units.get(i).isnil();i++){x+=coord(units.get(i),"x");y+=coord(units.get(i),"y");n++;}return n==0?LuaValue.NIL:point(x/n,y/n);}});
         rw.set("data_groups", stringTable(DATA_GROUPS));
         rw.set("unit_fields", stringTable(UNIT_FIELDS));
+        rw.set("map_fields", stringTable(MAP_FIELDS));
         rw.set("commands", stringTable(COMMANDS));
         rw.set("lifecycle", stringTable(LIFECYCLE));
         LuaTable signatures=new LuaTable();
@@ -117,6 +123,7 @@ final class LuaProgram {
         signatures.set("finish","ctx:finish([unit_or_list])");
         signatures.set("exit","ctx:exit([local_message])");
         rw.set("command_signatures",signatures);
+        LuaTable queries=new LuaTable();queries.set("units","ctx:units([filter])");queries.set("self_units","ctx:self_units([filter])");queries.set("enemies","ctx:enemies([filter])");queries.set("allies","ctx:allies([filter])");queries.set("selected","ctx:selected([filter])");queries.set("get","ctx:get(id_or_unit)");queries.set("nearest_enemy","ctx:nearest_enemy(point_or_unit[,filter])");queries.set("within","ctx:within(point,radius[,filter])");queries.set("tile_at","ctx:tile_at(point)");queries.set("tile_rect","ctx:tile_rect(tile_x,tile_y,width,height[,step])");queries.set("fog_at","ctx:fog_at(point)");queries.set("is_fogged","ctx:is_fogged(point)");queries.set("is_visible","ctx:is_visible(point)");queries.set("path_tile_at","ctx:path_tile_at(point[,movement_type[,radius]])");queries.set("is_path_passable","ctx:is_path_passable(point[,movement_type[,radius]])");queries.set("is_passable","ctx:is_passable(point[,movement_type[,radius]])");queries.set("find_path","ctx:find_path(start,goal[,movement_type[,options]])");queries.set("groups","ctx:groups()");queries.set("group_of","ctx:group_of(unit_or_id)");rw.set("query_signatures",queries);
         LuaTable fieldGroups=new LuaTable();
         putGroup(fieldGroups,"identity","id","type_id","type_name","building","orderable","dead","deleted");
         putGroup(fieldGroups,"team","team_id","team_name","relation","relation_name");
@@ -127,13 +134,22 @@ final class LuaProgram {
         putGroup(fieldGroups,"weapons","weapons");putGroup(fieldGroups,"pathing","path_state","path_pending");
         putGroup(fieldGroups,"orders","current_order","order_target_id","order_x","order_y","waypoint_count","idle");
         putGroup(fieldGroups,"transport","carrier_id","attached","transport_capacity","loaded_unit_ids");putGroup(fieldGroups,"build","build_progress","factory","queue_size","buildable_types");
-        putGroup(fieldGroups,"production","production_items");putGroup(fieldGroups,"actions","actions");putGroup(fieldGroups,"abilities","abilities");
-        putGroup(fieldGroups,"damage","last_damaged_tick");putGroup(fieldGroups,"selection","selected");putGroup(fieldGroups,"map","visible_to_local","fogged_to_local","explored_to_local");rw.set("field_groups",fieldGroups);
+        putGroup(fieldGroups,"production","production_items");putGroup(fieldGroups,"actions","actions","action_details");putGroup(fieldGroups,"abilities","abilities");
+        putGroup(fieldGroups,"damage","last_damaged_tick","last_damage_amount","last_damage_source_id");putGroup(fieldGroups,"selection","selected");putGroup(fieldGroups,"map","visible_to_local","fogged_to_local","explored_to_local");rw.set("field_groups",fieldGroups);
         rw.set("unit_types", new LuaTable());
         rw.set("catalog", new org.luaj.vm2.lib.ZeroArgFunction() {
             @Override public LuaValue call() {
-                return LuaValue.valueOf("data="+join(DATA_GROUPS)+"\nfields="+join(UNIT_FIELDS)+"\ncommands="+join(COMMANDS)+"\nlifecycle="+join(LIFECYCLE));
+                Set<String> values=runtimeCapabilities.get();
+                return LuaValue.valueOf("data="+join(DATA_GROUPS)
+                        +"\nfields="+join(UNIT_FIELDS)
+                        +"\nmap_fields="+join(MAP_FIELDS)
+                        +"\ncommands="+join(COMMANDS)
+                        +"\nlifecycle="+join(LIFECYCLE)
+                        +"\ncapabilities="+join(values.toArray(new String[0])));
             }
+        });
+        rw.set("capabilities", new org.luaj.vm2.lib.ZeroArgFunction() {
+            @Override public LuaValue call() { Set<String> values=runtimeCapabilities.get();return stringTable(values.toArray(new String[0])); }
         });
         rw.set("log", new VarArgFunction() {
             @Override public Varargs invoke(Varargs args) {
@@ -147,10 +163,11 @@ final class LuaProgram {
         finally { budget.end(); }
         if (metadata[0] == null) throw new IOException("缺少 rw.script{api,id,name,units}");
         if (handlers.isEmpty()) throw new IOException("至少注册一个 rw.on_tick(interval, function)");
-        return new LuaProgram(globals, metadata[0], handlers, budget);
+        return new LuaProgram(globals, rw, metadata[0], handlers, budget, runtimeCapabilities);
     }
 
     void tick(GameSnapshot snapshot, CommandGateway gateway, UnitPolicy policy, Map<String,Object> settings) throws Throwable {
+        runtimeCapabilities.set(gateway.capabilities());
         for (TickHandler handler : ticks) {
             if (handler.lastTick != Integer.MIN_VALUE && snapshot.tick - handler.lastTick < handler.interval) continue;
             handler.lastTick = snapshot.tick;
@@ -178,7 +195,7 @@ final class LuaProgram {
     interface UnitPolicy { boolean enabled(UnitSnapshot unit); void finish(long unitId); String group(long unitId); void exit(String localMessage); }
 
     private LuaTable context(GameSnapshot snapshot, CommandGateway gateway, UnitPolicy policy, Map<String,Object> settings) {
-        globals.get("rw").set("unit_types", wants("catalog") ? typeCatalog(snapshot) : new LuaTable());
+        rw.set("unit_types", wants("catalog") ? typeCatalog(snapshot) : new LuaTable());
         java.util.HashMap<Long,LuaTable> unitTables=new java.util.HashMap<>();
         LuaTable ctx = new LuaTable();
         ctx.set("tick", snapshot.tick); ctx.set("multiplayer", LuaValue.valueOf(snapshot.multiplayer));
@@ -190,17 +207,20 @@ final class LuaProgram {
         ctx.set("fog_at",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);return value(snapshot.fogAt((float)coord(p,"x"),(float)coord(p,"y")));}});
         ctx.set("is_fogged",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);Object fog=snapshot.fogAt((float)coord(p,"x"),(float)coord(p,"y")).get("fogged");return fog instanceof Boolean?LuaValue.valueOf((Boolean)fog):LuaValue.NIL;}});
         ctx.set("is_visible",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);Object visible=snapshot.fogAt((float)coord(p,"x"),(float)coord(p,"y")).get("visible");return visible instanceof Boolean?LuaValue.valueOf((Boolean)visible):LuaValue.NIL;}});
-        ctx.set("path_tile_at",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND");return value(snapshot.pathAt((float)coord(p,"x"),(float)coord(p,"y"),movement));}});
-        ctx.set("is_path_passable",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND");Object passable=snapshot.pathAt((float)coord(p,"x"),(float)coord(p,"y"),movement).get("passable");return passable instanceof Boolean?LuaValue.valueOf((Boolean)passable):LuaValue.NIL;}});
-        ctx.set("is_passable",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND").toUpperCase();float x=(float)coord(p,"x"),y=(float)coord(p,"y");Object nativePassable=snapshot.pathAt(x,y,movement).get("passable");if(nativePassable instanceof Boolean)return LuaValue.valueOf((Boolean)nativePassable);Map<String,Object> tile=snapshot.tileAt(x,y);if(tile.isEmpty()||Boolean.FALSE.equals(tile.get("in_bounds")))return LuaValue.FALSE;boolean water=Boolean.TRUE.equals(tile.get("water")),bridge=Boolean.TRUE.equals(tile.get("water_bridge")),cliff=Boolean.TRUE.equals(tile.get("cliff")),large=Boolean.TRUE.equals(tile.get("large_cliff_or_trees")),blocked=Boolean.TRUE.equals(tile.get("land_blocked"));boolean ok=movement.contains("AIR")?true:movement.contains("WATER")?water&&!bridge:movement.contains("HOVER")?!large:(!water||bridge)&&!cliff&&!large&&!blocked;return LuaValue.valueOf(ok);}});
+        ctx.set("path_tile_at",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND");float radius=(float)a.arg(b+2).optdouble(0);return value(snapshot.pathAt((float)coord(p,"x"),(float)coord(p,"y"),movement,radius));}});
+        ctx.set("is_path_passable",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND");float radius=(float)a.arg(b+2).optdouble(0);Object passable=snapshot.pathAt((float)coord(p,"x"),(float)coord(p,"y"),movement,radius).get("passable");return passable instanceof Boolean?LuaValue.valueOf((Boolean)passable):LuaValue.NIL;}});
+        ctx.set("is_passable",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND").toUpperCase();float radius=(float)a.arg(b+2).optdouble(0);float x=(float)coord(p,"x"),y=(float)coord(p,"y");Object nativePassable=snapshot.pathAt(x,y,movement,radius).get("passable");if(nativePassable instanceof Boolean)return LuaValue.valueOf((Boolean)nativePassable);Map<String,Object> tile=snapshot.tileAt(x,y);if(tile.isEmpty()||Boolean.FALSE.equals(tile.get("in_bounds")))return LuaValue.FALSE;boolean water=Boolean.TRUE.equals(tile.get("water")),bridge=Boolean.TRUE.equals(tile.get("water_bridge")),cliff=Boolean.TRUE.equals(tile.get("cliff")),large=Boolean.TRUE.equals(tile.get("large_cliff_or_trees")),blocked=Boolean.TRUE.equals(tile.get("land_blocked"));boolean ok=movement.contains("AIR")?true:movement.contains("WATER")?water&&!bridge:movement.contains("HOVER")?!large:(!water||bridge)&&!cliff&&!large&&!blocked;return LuaValue.valueOf(ok);}});
+        ctx.set("tile_rect",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;int tx=a.checkint(b),ty=a.checkint(b+1),w=Math.max(0,a.checkint(b+2)),h=Math.max(0,a.checkint(b+3)),step=Math.max(1,a.optint(b+4,1));int total=((w+step-1)/step)*((h+step-1)/step);if(total>1024)throw new LuaError("tile_rect 最多返回 1024 个地块");Number tw=number(snapshot.map.get("tile_width")),th=number(snapshot.map.get("tile_height"));LuaTable out=new LuaTable();if(tw==null||th==null)return out;int i=1;for(int yy=0;yy<h;yy+=step)for(int xx=0;xx<w;xx+=step)out.set(i++,value(snapshot.tileAt((float)((tx+xx+0.5)*tw.doubleValue()),(float)((ty+yy+0.5)*th.doubleValue()))));return out;}});
+        ctx.set("find_path",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue start=a.arg(b),goal=a.arg(b+1);String movement=a.arg(b+2).optjstring("LAND");LuaValue options=a.arg(b+3);float radius=options.istable()?(float)options.get("radius").optdouble(0):0f;int maxNodes=options.istable()?options.get("max_nodes").optint(4096):4096;return value(snapshot.findPath((float)coord(start,"x"),(float)coord(start,"y"),(float)coord(goal,"x"),(float)coord(goal,"y"),movement,radius,maxNodes));}});
         ctx.set("units", queryFunction(snapshot, policy, -1,unitTables));
         ctx.set("self_units", queryFunction(snapshot, policy, 0,unitTables));
         ctx.set("enemies", queryFunction(snapshot, policy, 1,unitTables));
         ctx.set("allies", queryFunction(snapshot, policy, 2,unitTables));
         ctx.set("selected", new VarArgFunction() {
-            @Override public Varargs invoke(Varargs ignored) {
+            @Override public Varargs invoke(Varargs a) {
+                int base=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;UnitFilter filter=UnitFilter.parse(a.arg(base));
                 LuaTable result = new LuaTable(); int i = 1;
-                for (UnitSnapshot u : snapshot.units) if (u.selected && !u.dead && !u.deleted)
+                for (UnitSnapshot u : snapshot.units) if (u.selected && !u.dead && !u.deleted && filter.matches(u))
                     result.set(i++, exposedUnit(u,unitTables,policy));
                 return result;
             }
@@ -216,10 +236,11 @@ final class LuaProgram {
                 int base = a.arg1().istable() && a.arg1().get("tick").isnumber() ? 2 : 1;
                 LuaValue from = a.arg(base), filter = a.arg(base + 1);
                 double range = filter.istable() ? filter.get("range").optdouble(Double.MAX_VALUE) : Double.MAX_VALUE;
-                UnitSnapshot best = null; double bestD = range * range;
+                UnitFilter parsed=UnitFilter.parse(filter);
+                UnitSnapshot best = null; double bestD = range * range,fx=coord(from,"x"),fy=coord(from,"y");
                 for (UnitSnapshot u : snapshot.units) {
-                    if (u.relation != 1 || u.dead || u.deleted || !matchesFilter(u, filter)) continue;
-                    double dx = coord(from, "x") - u.x, dy = coord(from, "y") - u.y, d = dx * dx + dy * dy;
+                    if (u.relation != 1 || u.dead || u.deleted || !parsed.matches(u)) continue;
+                    double dx = fx - u.x, dy = fy - u.y, d = dx * dx + dy * dy;
                     if (d < bestD || d == bestD && (best == null || u.id < best.id)) { bestD = d; best = u; }
                 }
                 return best == null ? LuaValue.NIL : exposedUnit(best,unitTables,policy);
@@ -230,10 +251,11 @@ final class LuaProgram {
                 int base = a.arg1().istable() && a.arg1().get("tick").isnumber() ? 2 : 1;
                 LuaValue center = a.arg(base), filter = a.arg(base + 2);
                 double radius = a.checkdouble(base + 1), limit = radius * radius;
-                LuaTable result = new LuaTable(); int index = 1;
+                UnitFilter parsed=UnitFilter.parse(filter);
+                LuaTable result = new LuaTable(); int index = 1;double cx=coord(center,"x"),cy=coord(center,"y");
                 for (UnitSnapshot u : snapshot.units) {
-                    if (u.dead || u.deleted || !matchesFilter(u, filter)) continue;
-                    double dx = coord(center, "x") - u.x, dy = coord(center, "y") - u.y;
+                    if (u.dead || u.deleted || !parsed.matches(u)) continue;
+                    double dx = cx - u.x, dy = cy - u.y;
                     if (dx * dx + dy * dy <= limit) result.set(index++, exposedUnit(u,unitTables,policy));
                 }
                 return result;
@@ -294,10 +316,12 @@ final class LuaProgram {
 
     private LuaValue queryFunction(GameSnapshot snapshot, UnitPolicy policy, int relation,Map<Long,LuaTable> cache) {
         return new VarArgFunction() {
-            @Override public Varargs invoke(Varargs ignored) {
+            @Override public Varargs invoke(Varargs a) {
+                int base=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;UnitFilter filter=UnitFilter.parse(a.arg(base));
                 LuaTable result = new LuaTable(); int i = 1;
                 for (UnitSnapshot u : snapshot.units) {
                     if (u.dead || u.deleted || relation >= 0 && u.relation != relation) continue;
+                    if (!filter.matches(u)) continue;
                     if (relation == 0 && (!definition.acceptsUnit(u.typeId, u.typeName) || !policy.enabled(u))) continue;
                     result.set(i++, exposedUnit(u,cache,policy));
                 }
@@ -326,24 +350,19 @@ final class LuaProgram {
     }
     private LuaTable cachedUnit(UnitSnapshot u,Map<Long,LuaTable> cache){LuaTable t=cache.get(u.id);if(t==null){t=unit(u);cache.put(u.id,t);}return t;}
     private LuaTable exposedUnit(UnitSnapshot u,Map<Long,LuaTable> cache,UnitPolicy policy){LuaTable t=cachedUnit(u,cache);String group=policy.group(u.id);if(group!=null)t.set("group_id",group);return t;}
-    private static boolean matchesFilter(UnitSnapshot u, LuaValue filter) {
-        if (!filter.istable()) return true;
-        LuaValue relation = filter.get("relation");
-        if (!relation.isnil()) {
-            String wanted = relation.tojstring();
-            if (!("all".equalsIgnoreCase(wanted)
-                    || "self".equalsIgnoreCase(wanted) && u.relation == 0
-                    || "enemy".equalsIgnoreCase(wanted) && u.relation == 1
-                    || "ally".equalsIgnoreCase(wanted) && u.relation == 2)) return false;
+    private static final class UnitFilter{
+        static final UnitFilter ANY=new UnitFilter(null,null,null,null,null,true);
+        final Integer relation;final Boolean orderable,selected,building;final Set<String> types;final boolean allTypes;
+        UnitFilter(Integer relation,Boolean orderable,Boolean selected,Boolean building,Set<String> types,boolean allTypes){this.relation=relation;this.orderable=orderable;this.selected=selected;this.building=building;this.types=types;this.allTypes=allTypes;}
+        static UnitFilter parse(LuaValue filter){
+            if(!filter.istable())return ANY;
+            Integer relation=null;LuaValue relationValue=filter.get("relation");if(!relationValue.isnil()){String value=relationValue.tojstring();if("self".equalsIgnoreCase(value))relation=0;else if("enemy".equalsIgnoreCase(value))relation=1;else if("ally".equalsIgnoreCase(value))relation=2;else if(!"all".equalsIgnoreCase(value))relation=Integer.MIN_VALUE;}
+            LuaValue orderable=filter.get("orderable"),selected=filter.get("selected"),building=filter.get("building");
+            LuaValue declared=filter.get("types");if(declared.isnil())declared=filter.get("type");if(declared.isnil())declared=filter.get("unit");
+            LinkedHashSet<String> types=null;boolean all=declared.isnil();if(!all){types=new LinkedHashSet<>();if(declared.isstring())types.add(declared.tojstring());else if(declared.istable())for(int i=1;;i++){LuaValue value=declared.get(i);if(value.isnil())break;types.add(value.tojstring());}all=types.contains("All")||types.contains("*");}
+            return new UnitFilter(relation,orderable.isnil()?null:orderable.toboolean(),selected.isnil()?null:selected.toboolean(),building.isnil()?null:building.toboolean(),types,all);
         }
-        if (!filter.get("orderable").isnil() && filter.get("orderable").toboolean()!=u.orderable) return false;
-        if (!filter.get("selected").isnil() && filter.get("selected").toboolean()!=u.selected) return false;
-        if (!filter.get("building").isnil() && filter.get("building").toboolean()!=u.building) return false;
-        LuaValue types = first(filter, "types", "type", "unit");
-        if (types.isnil()) return true;
-        for (String type : strings(types)) if ("All".equals(type) || "*".equals(type)
-                || type.equals(u.typeId)) return true;
-        return false;
+        boolean matches(UnitSnapshot unit){return(relation==null||relation==unit.relation)&&(orderable==null||orderable==unit.orderable)&&(selected==null||selected==unit.selected)&&(building==null||building==unit.building)&&(allTypes||types!=null&&types.contains(unit.typeId));}
     }
 
     private List<Long> controlledIds(LuaValue value, GameSnapshot snapshot, UnitPolicy policy) {
@@ -400,8 +419,9 @@ final class LuaProgram {
     private static LuaTable stringTable(String[] values){LuaTable t=new LuaTable();for(int i=0;i<values.length;i++)t.set(i+1,values[i]);return t;}
     private static void putGroup(LuaTable table,String group,String...fields){for(String field:fields)table.set(field,group);}
     private static String join(String[] values){StringBuilder b=new StringBuilder();for(String v:values){if(b.length()>0)b.append(',');b.append(v);}return b.toString();}
-    private static LuaTable typeCatalog(GameSnapshot snapshot){LuaTable out=new LuaTable();for(UnitSnapshot u:snapshot.units){if(out.get(u.typeId).isnil()){LuaTable t=new LuaTable();set(t,"id",u.typeId);set(t,"name",u.typeName);set(t,"custom",u.custom);set(t,"movement_type",u.movementType);set(t,"attack_range",u.attackRange);set(t,"max_move_speed",u.maxMoveSpeed);set(t,"radius",u.radius);set(t,"max_health",u.maxHealth);set(t,"max_shield",u.maxShield);set(t,"weapon_count",u.weaponCount);for(String k:new String[]{"acceleration","deceleration","turn_speed","weapons","abilities","transport_capacity"})if(u.extras.containsKey(k))t.set(k,value(u.extras.get(k)));LuaTable a=new LuaTable();int i=1;for(String v:u.actionIds)a.set(i++,v);t.set("actions",a);LuaTable b=new LuaTable();i=1;for(String v:u.buildableTypes)b.set(i++,v);t.set("buildable_types",b);out.set(u.typeId,t);}}return out;}
+    private static LuaTable typeCatalog(GameSnapshot snapshot){LuaTable out=new LuaTable();for(UnitSnapshot u:snapshot.units){if(out.get(u.typeId).isnil()){LuaTable t=new LuaTable();set(t,"id",u.typeId);set(t,"name",u.typeName);set(t,"custom",u.custom);set(t,"movement_type",u.movementType);set(t,"attack_range",u.attackRange);set(t,"max_move_speed",u.maxMoveSpeed);set(t,"radius",u.radius);set(t,"max_health",u.maxHealth);set(t,"max_shield",u.maxShield);set(t,"weapon_count",u.weaponCount);for(String k:new String[]{"acceleration","deceleration","turn_speed","weapons","abilities","transport_capacity","action_details"})if(u.extras.containsKey(k))t.set(k,value(u.extras.get(k)));LuaTable a=new LuaTable();int i=1;for(String v:u.actionIds)a.set(i++,v);t.set("actions",a);LuaTable b=new LuaTable();i=1;for(String v:u.buildableTypes)b.set(i++,v);t.set("buildable_types",b);out.set(u.typeId,t);}}return out;}
     private static void set(LuaTable t,String k,Object v){ if(v==null)return;if(v instanceof String)t.set(k,(String)v);else if(v instanceof Boolean)t.set(k,LuaValue.valueOf((Boolean)v));else if(v instanceof Number)t.set(k,((Number)v).doubleValue()); }
+    private static Number number(Object v){return v instanceof Number?(Number)v:null;}
     private static LuaValue value(Object v){
         if(v==null)return LuaValue.NIL;if(v instanceof LuaValue)return (LuaValue)v;
         if(v instanceof String)return LuaValue.valueOf((String)v);if(v instanceof Boolean)return LuaValue.valueOf((Boolean)v);

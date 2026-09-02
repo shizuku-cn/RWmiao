@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.graphics.PointF;
 
 import com.shizuku.rwmiao.config.SettingsContract;
+import com.shizuku.rwmiao.module.smartbuild.SmartBuildSerialization;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
@@ -15,20 +16,10 @@ import java.util.ArrayList;
 
 import io.github.libxposed.api.XposedInterface;
 
-/**
- * Extends the native drag/line placement path without replacing its validation.
- *
- * <p>In the 1.15 target the native method returns after 29 successful points.
- * The hook lets that method process the next portion of the same line, reusing
- * the game's own map snapping, collision, fog and permission checks. This is
- * deliberately separate from the global unit-cap feature: it only changes how
- * many positions one drag can submit.</p>
- */
 public final class BatchPlacement {
     private static final String TAG = "RWmiao";
     private static final int NATIVE_SUCCESS_LIMIT = 29;
-    // A normal map is exhausted well before this. It is only a recursion guard
-    // against a target build whose grid transform never advances.
+    private static final int FREE_BUILD_QUEUE_LIMIT = 28;
     private static final int MAX_CONTINUATIONS = 1024;
     private static final int INITIAL_DYNAMIC_WAYPOINT_CAPACITY = 64;
     private static final int MAX_DYNAMIC_WAYPOINTS = 4096;
@@ -39,12 +30,18 @@ public final class BatchPlacement {
     private final ClassLoader loader;
     private final Object hooksLock = new Object();
     private final ThreadLocal<Boolean> nativeReentry = new ThreadLocal<>();
+    private SmartBuildSerialization smartBuildSerialization;
 
     private volatile boolean enabled;
+    private volatile boolean unlimitedEnabled;
+    private volatile boolean smartBuildEnabled;
+    private volatile boolean freeBuildQueueExpansion;
     private boolean hookInstalled;
     private XposedInterface.HookHandle placementHook;
     private XposedInterface.HookHandle waypointHook;
+    private XposedInterface.HookHandle waypointAllocateHook;
     private Method placementMethod;
+    private Method waypointAllocateMethod;
     private Field blockoutXField;
     private Field blockoutYField;
     private Field waypointCountField;
@@ -67,7 +64,15 @@ public final class BatchPlacement {
         synchronized (hooksLock) {
             boolean shouldEnable = readBoolean(
                     SettingsContract.KEY_BATCH_PLACEMENT_UNLIMITED, false);
-            if (shouldEnable && !hookInstalled) {
+            boolean shouldEnableSmartBuild = readBoolean(
+                    SettingsContract.KEY_SMART_BUILD_SERIALIZATION, false);
+            unlimitedEnabled = shouldEnable;
+            smartBuildEnabled = shouldEnableSmartBuild;
+            if (shouldEnableSmartBuild && smartBuildSerialization == null) {
+                smartBuildSerialization = new SmartBuildSerialization(host, loader);
+            }
+            if ((shouldEnable || shouldEnableSmartBuild || freeBuildQueueExpansion)
+                    && !hookInstalled) {
                 try {
                     installHook();
                     hookInstalled = true;
@@ -76,11 +81,35 @@ public final class BatchPlacement {
                     uninstallLocked();
                     throw t;
                 }
-            } else if (!shouldEnable && hookInstalled) {
+            } else if (!shouldEnable && !shouldEnableSmartBuild
+                    && !freeBuildQueueExpansion && hookInstalled) {
                 uninstallLocked();
             } else {
-                enabled = shouldEnable;
+                enabled = shouldEnable || shouldEnableSmartBuild || freeBuildQueueExpansion;
             }
+            if (smartBuildSerialization != null) {
+                smartBuildSerialization.refreshSettings(shouldEnableSmartBuild);
+            }
+        }
+    }
+
+    public void setFreeBuildQueueExpansion(boolean enabledForFreeBuild) throws Throwable {
+        synchronized (hooksLock) {
+            freeBuildQueueExpansion = enabledForFreeBuild;
+            boolean shouldInstall = unlimitedEnabled || smartBuildEnabled
+                    || freeBuildQueueExpansion;
+            if (shouldInstall && !hookInstalled) {
+                try {
+                    installHook();
+                    hookInstalled = true;
+                } catch (Throwable t) {
+                    uninstallLocked();
+                    throw t;
+                }
+            } else if (!shouldInstall && hookInstalled) {
+                uninstallLocked();
+            }
+            enabled = shouldInstall;
         }
     }
 
@@ -104,44 +133,46 @@ public final class BatchPlacement {
             throw new NoSuchMethodException(
                     "找不到原生批量放置方法 i.a(bp,float,float,float,float,boolean,ArrayList,ce)");
         }
-        // These are real Dex names in the target build, not JADX's synthetic
-        // display names. The native method itself saves/restores these fields.
         blockoutXField = host.findField(blockoutClass, "eq");
         blockoutYField = host.findField(blockoutClass, "er");
 
-        // The release path creates one build waypoint per accepted point and
-        // immediately calls bp.b(en). Native bp.an() stores only Q[0..28]:
-        // once O reaches 29 it keeps reusing Q[29], so later commands are
-        // present but overwrite one another before the builder can execute
-        // them. Extend that storage only for build waypoints and leave all
-        // other native order types on the original path.
-        Method waypointMethod = host.findCompatibleMethod(
-                blockoutClass, "b", waypointClass);
-        if (waypointMethod == null) {
-            throw new NoSuchMethodException(
-                    "找不到单位批量放置队列方法 bp.b(en)");
-        }
-        waypointCountField = host.findField(blockoutClass, "O");
-        waypointQueueField = host.findField(blockoutClass, "Q");
-        waypointTypeField = host.findField(waypointClass, "f521a");
-        waypointCopyMethod = host.findCompatibleMethod(
-                waypointClass, "c", waypointClass);
-        waypointStateResetMethod = host.findNoArgMethod(blockoutClass, "L");
-        waypointConstructor = waypointClass.getDeclaredConstructor();
-        waypointConstructor.setAccessible(true);
-        if (waypointCopyMethod == null || waypointStateResetMethod == null) {
-            throw new NoSuchMethodException(
-                    "找不到单位批量放置队列复制或状态重置方法");
+        Method waypointMethod = null;
+        try {
+            waypointMethod = host.findCompatibleMethod(
+                    blockoutClass, "b", waypointClass);
+            waypointCountField = host.findField(blockoutClass, "O");
+            waypointQueueField = host.findField(blockoutClass, "Q");
+            try {
+                waypointTypeField = host.findField(waypointClass, "f521a");
+            } catch (Throwable ignored) {
+                waypointTypeField = null;
+            }
+            waypointCopyMethod = host.findCompatibleMethod(
+                    waypointClass, "c", waypointClass);
+            waypointStateResetMethod = host.findNoArgMethod(blockoutClass, "L");
+            waypointAllocateMethod = host.findNoArgMethod(blockoutClass, "an");
+            waypointConstructor = waypointClass.getDeclaredConstructor();
+            waypointConstructor.setAccessible(true);
+            if (waypointCopyMethod == null || waypointStateResetMethod == null) {
+                throw new NoSuchMethodException(
+                        "找不到单位批量放置队列复制或状态重置方法");
+            }
+        } catch (Throwable t) {
+            waypointMethod = null;
+            waypointAllocateMethod = null;
+            waypointCountField = null;
+            waypointQueueField = null;
+            waypointTypeField = null;
+            waypointCopyMethod = null;
+            waypointStateResetMethod = null;
+            waypointConstructor = null;
+            host.log(4, TAG, "单位队列扩展 Hook 不可用，保留批量预览/释放 Hook", t);
         }
 
         placementHook = host.hookExecutable(placementMethod, chain -> {
             if (Boolean.TRUE.equals(nativeReentry.get()) || !enabled) {
                 return chain.proceed();
             }
-            // z=true is the two-finger line preview pass. It deliberately passes
-            // a null ArrayList, but the native method still draws each preview
-            // unit from inside its validator. z=false is the release pass and
-            // supplies the actual command-point ArrayList.
             boolean preview = Boolean.TRUE.equals(chain.getArg(5));
             Object rawPoints = chain.getArg(6);
             Object blockout = chain.getArg(0);
@@ -155,52 +186,110 @@ public final class BatchPlacement {
             try {
                 Object[] args = chainArgs(chain);
                 if (preview) {
-                    extendPreview(chain.getThisObject(), args, blockout);
+                    if (unlimitedEnabled) {
+                        extendPreview(chain.getThisObject(), args, blockout);
+                    }
                 } else {
-                    extendLine(chain.getThisObject(), args, (ArrayList<?>) rawPoints);
+                    if (unlimitedEnabled) {
+                        extendLine(chain.getThisObject(), args, (ArrayList<?>) rawPoints);
+                    }
+                    if (smartBuildEnabled && smartBuildSerialization != null) {
+                        smartBuildSerialization.captureRelease((ArrayList<?>) rawPoints);
+                    }
                 }
             } catch (Throwable t) {
                 host.log(5, TAG, "扩展原生批量放置失败，保留已生成的原生点", t);
             } finally {
-                // The native 29-point early return skips its normal restore.
-                // Restore the same state the unbounded native loop would leave.
                 blockoutXField.setFloat(blockout, originalX);
                 blockoutYField.setFloat(blockout, originalY);
             }
             return result;
         });
 
-        waypointHook = host.hookExecutable(waypointMethod, chain -> {
-            if (!enabled || !isBuildWaypoint(chain.getArg(0))) {
-                return chain.proceed();
-            }
-            Object unit = chain.getThisObject();
-            if (unit == null || waypointCountField.getInt(unit) < NATIVE_SUCCESS_LIMIT) {
-                return chain.proceed();
-            }
+        if (waypointMethod != null) {
             try {
-                Object appended = appendWaypoint(unit, chain.getArg(0));
-                return appended != null ? appended : chain.proceed();
+                waypointHook = host.hookExecutable(waypointMethod, chain -> {
+                    if (!enabled || (!unlimitedEnabled && !freeBuildQueueExpansion)
+                            || waypointCountField == null
+                            || !isBuildWaypoint(chain.getArg(0))) {
+                        return chain.proceed();
+                    }
+                    Object unit = chain.getThisObject();
+                    if (unit == null
+                            || waypointCountField.getInt(unit)
+                            < (freeBuildQueueExpansion
+                            ? FREE_BUILD_QUEUE_LIMIT : NATIVE_SUCCESS_LIMIT)) {
+                        return chain.proceed();
+                    }
+                    try {
+                        Object appended = appendWaypoint(unit, chain.getArg(0));
+                        return appended != null ? appended : chain.proceed();
+                    } catch (Throwable t) {
+                        host.log(5, TAG, "扩展单位建造队列失败，回退原生队列逻辑", t);
+                        return chain.proceed();
+                    }
+                });
             } catch (Throwable t) {
-                host.log(5, TAG, "扩展单位建造队列失败，回退原生队列逻辑", t);
-                return chain.proceed();
+                waypointHook = null;
+                host.log(4, TAG, "单位队列扩展 Hook 安装失败，保留批量预览/释放 Hook", t);
             }
-        });
+        }
+
+        if (waypointAllocateMethod != null && waypointCountField != null
+                && waypointQueueField != null && waypointConstructor != null
+                && waypointCopyMethod != null && waypointStateResetMethod != null) {
+            try {
+                waypointAllocateHook = host.hookExecutable(waypointAllocateMethod, chain -> {
+                    if (!enabled || !freeBuildQueueExpansion) {
+                        return chain.proceed();
+                    }
+                    Object unit = chain.getThisObject();
+                    if (unit == null
+                            || waypointCountField.getInt(unit) < FREE_BUILD_QUEUE_LIMIT) {
+                        return chain.proceed();
+                    }
+                    try {
+                        Object appended = appendWaypointSlot(unit);
+                        return appended != null ? appended : chain.proceed();
+                    } catch (Throwable t) {
+                        host.log(5, TAG, "扩展单位建造队列分配槽位失败，回退原生队列逻辑", t);
+                        return chain.proceed();
+                    }
+                });
+            } catch (Throwable t) {
+                waypointAllocateHook = null;
+                host.log(4, TAG, "单位队列分配方法 Hook 安装失败", t);
+            }
+        }
     }
 
     private boolean isBuildWaypoint(Object waypoint) throws IllegalAccessException {
         if (waypoint == null) return false;
-        Object type = waypointTypeField.get(waypoint);
-        return type instanceof Enum
-                && "build".equals(((Enum<?>) type).name());
+        if (waypointTypeField != null) {
+            Object type = waypointTypeField.get(waypoint);
+            return type instanceof Enum
+                    && "build".equals(((Enum<?>) type).name());
+        }
+        for (Field field : waypoint.getClass().getDeclaredFields()) {
+            if (!field.getType().isEnum()) continue;
+            field.setAccessible(true);
+            Object type = field.get(waypoint);
+            if (type instanceof Enum && "build".equals(((Enum<?>) type).name())) {
+                waypointTypeField = field;
+                return true;
+            }
+        }
+        return false;
     }
 
-    /**
-     * Equivalent to bp.b(en), but without the target's 29-entry append cap.
-     * The returned object remains an actual element of the game's Q array, so
-     * the caller's normal bp.a(en) completion path still runs unchanged.
-     */
     private Object appendWaypoint(Object unit, Object source) throws Throwable {
+        Object stored = appendWaypointSlot(unit);
+        if (stored == null) return null;
+        waypointCopyMethod.invoke(stored, source);
+        return stored;
+    }
+
+    private Object appendWaypointSlot(Object unit) throws Throwable {
         int count = waypointCountField.getInt(unit);
         if (count >= MAX_DYNAMIC_WAYPOINTS) {
             host.log(5, TAG, "批量放置队列达到保护阈值，保留原生队列行为: " + count);
@@ -231,19 +320,11 @@ public final class BatchPlacement {
             stored = waypointConstructor.newInstance();
             Array.set(queue, count, stored);
         }
-        waypointCopyMethod.invoke(stored, source);
         waypointCountField.setInt(unit, count + 1);
         waypointStateResetMethod.invoke(unit);
         return stored;
     }
 
-    /**
-     * The preview call has no result list. On the native 29-point early return
-     * the blockout unit is left at the last sampled point, so that position is
-     * the continuation cursor. A normal native return restores the entry
-     * position; that gives us a reliable stop signal without changing the
-     * game's drawing code.
-     */
     private void extendPreview(Object receiver, Object[] args, Object blockout)
             throws Throwable {
         float startX = number(args[1]);
@@ -277,8 +358,6 @@ public final class BatchPlacement {
 
             float nextX = blockoutXField.getFloat(blockout);
             float nextY = blockoutYField.getFloat(blockout);
-            // A normal native return restores the blockout position saved at
-            // entry; an early 29-point return leaves it at a later candidate.
             if (samePoint(entryX, entryY, nextX, nextY)) return;
             if (samePoint(currentX, currentY, nextX, nextY)) return;
             currentX = nextX;
@@ -289,7 +368,6 @@ public final class BatchPlacement {
         }
     }
 
-    /** The API exposes arguments through the chain; this creates a stable copy for re-entry. */
     private Object[] chainArgs(XposedInterface.Chain chain) {
         Object[] args = new Object[8];
         for (int i = 0; i < args.length; i++) {
@@ -327,9 +405,6 @@ public final class BatchPlacement {
 
             int before = points.size();
             Object[] nextArgs = args.clone();
-            // Start one native sampling interval after the last accepted point.
-            // The original validator will discard any snapped duplicate and then
-            // continue with its own exact p-sized sampling sequence.
             nextArgs[1] = Float.valueOf(last.x + (dx * step));
             nextArgs[2] = Float.valueOf(last.y + (dy * step));
             nextArgs[3] = Float.valueOf(endX);
@@ -430,6 +505,13 @@ public final class BatchPlacement {
                 host.log(5, TAG, "卸载批量放置队列 Hook 失败", t);
             }
         }
+        if (waypointAllocateHook != null) {
+            try {
+                waypointAllocateHook.unhook();
+            } catch (Throwable t) {
+                host.log(5, TAG, "卸载批量放置分配 Hook 失败", t);
+            }
+        }
         if (placementHook != null) {
             try {
                 placementHook.unhook();
@@ -438,8 +520,10 @@ public final class BatchPlacement {
             }
         }
         waypointHook = null;
+        waypointAllocateHook = null;
         placementHook = null;
         placementMethod = null;
+        waypointAllocateMethod = null;
         blockoutXField = null;
         blockoutYField = null;
         waypointCountField = null;
@@ -448,6 +532,16 @@ public final class BatchPlacement {
         waypointCopyMethod = null;
         waypointStateResetMethod = null;
         waypointConstructor = null;
+        if (smartBuildSerialization != null) {
+            try {
+                smartBuildSerialization.refreshSettings(false);
+            } catch (Throwable t) {
+                host.log(5, TAG, "卸载智能建造序列化 Hook 失败", t);
+            }
+        }
+        smartBuildEnabled = false;
+        unlimitedEnabled = false;
+        freeBuildQueueExpansion = false;
         hookInstalled = false;
         enabled = false;
     }

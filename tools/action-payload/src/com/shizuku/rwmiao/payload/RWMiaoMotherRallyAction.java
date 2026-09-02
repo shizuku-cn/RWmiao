@@ -6,7 +6,6 @@ import com.corrodinggames.rts.game.units.a.u;
 import com.corrodinggames.rts.game.units.ce;
 import com.corrodinggames.rts.game.units.el;
 
-/** Fallback rally entry for producer units that do not declare the native action. */
 public final class RWMiaoMotherRallyAction extends s {
     public static final RWMiaoMotherRallyAction INST = new RWMiaoMotherRallyAction();
 

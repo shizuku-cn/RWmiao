@@ -15,19 +15,8 @@ import java.util.List;
 
 import io.github.libxposed.api.XposedInterface;
 
-/**
- * 全局游戏上限扩展。
- * Global game-limit overrides.
- *
- * <p>单位上限和队伍/出生点扩展均按开关动态安装 Hook；关闭时不保留目标方法 Hook，
- * 也不在对局帧循环中读取设置。</p>
- * The unit-cap and team/slot extensions are installed only while enabled and never run
- * from a gameplay frame loop.</p>
- */
 public final class GameLimits {
     private static final String TAG = "RWmiao";
-    // The native protocol accepts up to 100 slots; expose the usable 1..99 range.
-    // 原生协议最多接受 100 个槽位，这里向用户开放 1..99 的出生点/队伍编号。
     private static final int MAX_EXTENDED_SLOT_COUNT = 99;
 
     private final RWmiaoModule host;
@@ -49,15 +38,11 @@ public final class GameLimits {
     private Field settingsSinglePlayerCap;
     private Field settingsHostedCap;
 
-    // The native values are restored when the switch is turned off.
-    // 关闭开关时恢复原生设置，避免留下持久化的覆盖值。
     private Object overriddenSettings;
     private int originalSinglePlayerCap;
     private int originalHostedCap;
     private boolean settingsOverrideSaved;
 
-    // Native lobby/editor contracts used only while the team-limit switch is enabled.
-    // 仅在开启队伍上限扩展时解析这些原生大厅/编辑器契约。
     private Field nativeItemsField;
     private Field nativeValueField;
     private Field editorSpawnSpinnerField;
@@ -133,15 +118,8 @@ public final class GameLimits {
         nativeOptionConstructor = gbClass.getDeclaredConstructor(
                 String.class, String.class, Integer.class);
         nativeOptionConstructor.setAccessible(true);
-        // JADX displays this field as f189a, but its runtime/Dex name is "a"
-        // (see the decompiler's "renamed from: a" marker).  Prefer the real
-        // name and keep the JADX name as a compatibility fallback.
-        // JADX 将该字段显示为 f189a，但运行时/Dex 名称是“a”（反编译器标记为
-        // “renamed from: a”）；优先使用真实名称，并保留显示名作为兼容回退。
         nativeValueField = findFieldAny(gbClass, "a", "f189a");
         Class<?> gaClass = loader.loadClass(host.target("appFramework.ga"));
-        // ga.a is likewise rendered as f188a by JADX.
-        // ga.a 同样会被 JADX 显示为 f188a。
         nativeItemsField = findFieldAny(gaClass, "a", "f188a");
 
         spawnDropdownHook = host.hookExecutable(spawnSetup, chain -> {
@@ -168,8 +146,6 @@ public final class GameLimits {
         if (apply == null) {
             throw new NoSuchMethodException("找不到原生玩家编辑器应用按钮回调");
         }
-        // fb.e is the native Spawn point Spinner; expand before vanilla clamps it.
-        // fb.e 是原生“Spawn point” Spinner，必须在原版限幅前扩展槽位数量。
         editorSpawnSpinnerField = host.findField(playerEditorClass, "e");
         playerEditorApplyHook = host.hookExecutable(apply, chain -> {
             try {
@@ -193,8 +169,6 @@ public final class GameLimits {
 
         int selected = spinner.getSelectedItemPosition();
         if (team) {
-            // Keep vanilla "auto" and Side A..J, then append Side K..99.
-            // 保留原生“auto”和 A..J，再追加 K..99。
             for (int userValue = 11; userValue <= MAX_EXTENDED_SLOT_COUNT; userValue++) {
                 String value = String.valueOf(userValue);
                 if (containsNativeValue(items, value)) continue;
@@ -204,8 +178,6 @@ public final class GameLimits {
                 items.add(newNativeOption(value, "Side " + name, color));
             }
         } else {
-            // Keep the native order and place extra spawn points before Spectator.
-            // 保留原生顺序，将额外出生点插入 Spectator 之前。
             int spectatorIndex = indexOfNativeValue(items, "-3");
             if (spectatorIndex < 0) spectatorIndex = items.size();
             for (int nativeValue = 10; nativeValue < MAX_EXTENDED_SLOT_COUNT; nativeValue++) {
@@ -282,14 +254,8 @@ public final class GameLimits {
                 chain -> {
                     int cap = readUnitCap();
                     saveAndApplyNativeUnitCap(cap);
-                    // Apply before vanilla initialization so both the single-player
-                    // setting and the hosted-game setting use the custom priority.
-                    // 在原版初始化前覆盖两套原生设置，确保单人和私人房间都使用自定义值。
                     forceNetworkUnitCap(currentNetwork(), cap);
                     Object result = chain.proceed();
-                    // Vanilla may copy the room value during initialization; write the
-                    // live fields once more after it returns, not every frame.
-                    // 原版初始化可能再次复制房间值，返回后再写一次运行时字段即可。
                     forceNetworkUnitCap(currentNetwork(), cap);
                     forceGameUnitCap(chain.getThisObject(), cap);
                     return result;

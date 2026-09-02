@@ -3,7 +3,6 @@ package com.corrodinggames.rts.game.units.a;
 import com.corrodinggames.rts.game.units.ce;
 import com.corrodinggames.rts.game.units.el;
 
-/** Minimal shape of the game's special UI-action base class. */
 public abstract class p extends s {
     public p(String id) { super("c__cut_" + id); }
     public final int b(ce unit, boolean preview) { return -1; }

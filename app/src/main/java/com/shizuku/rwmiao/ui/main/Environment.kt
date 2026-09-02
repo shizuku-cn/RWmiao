@@ -28,9 +28,11 @@ import com.shizuku.rwmiao.config.SettingsContract.KEY_GLOBAL_UNIT_CAP
 import com.shizuku.rwmiao.config.SettingsContract.KEY_GLOBAL_UNIT_CAP_ENABLED
 import com.shizuku.rwmiao.config.SettingsContract.KEY_BATCH_PLACEMENT_UNLIMITED
 import com.shizuku.rwmiao.config.SettingsContract.KEY_FORMATION_BUTTON_COUNT
+import com.shizuku.rwmiao.config.SettingsContract.KEY_HOST_MUTE_PANEL
 import com.shizuku.rwmiao.config.SettingsContract.KEY_LOBBY_SEARCHER
 import com.shizuku.rwmiao.config.SettingsContract.KEY_MOTHER_RALLY
 import com.shizuku.rwmiao.config.SettingsContract.KEY_SELECTION_PANEL_COLUMNS
+import com.shizuku.rwmiao.config.SettingsContract.KEY_SMART_BUILD_SERIALIZATION
 import com.shizuku.rwmiao.config.SettingsContract.MAX_FORMATION_BUTTON_COUNT
 import com.shizuku.rwmiao.config.SettingsContract.MAX_SELECTION_PANEL_COLUMNS
 import com.shizuku.rwmiao.config.SettingsContract.MIN_FORMATION_BUTTON_COUNT
@@ -58,6 +60,12 @@ internal fun EnvironmentPage(page: SettingsPage, listState: LazyListState) {
     }
     var batchPlacementUnlimited by remember {
         mutableStateOf(page.preferences.getBoolean(KEY_BATCH_PLACEMENT_UNLIMITED, false))
+    }
+    var smartBuildSerialization by remember {
+        mutableStateOf(page.preferences.getBoolean(KEY_SMART_BUILD_SERIALIZATION, false))
+    }
+    var hostMutePanel by remember {
+        mutableStateOf(page.preferences.getBoolean(KEY_HOST_MUTE_PANEL, false))
     }
     var lobbySearcher by remember {
         mutableStateOf(page.preferences.getBoolean(KEY_LOBBY_SEARCHER, false))
@@ -151,8 +159,8 @@ internal fun EnvironmentPage(page: SettingsPage, listState: LazyListState) {
         item {
             SectionCard(compact = true) {
                 SwitchSetting(
-                    "解除批量放置单位上限",
-                    "解除例如沙盒模式中批量放置炮塔存在的上限",
+                    "解除批量放置或建造单位的上限",
+                    "解除例如沙盒模式中批量放置或者建造炮塔存在的上限",
                     batchPlacementUnlimited
                 ) {
                     batchPlacementUnlimited = it
@@ -189,8 +197,6 @@ internal fun EnvironmentPage(page: SettingsPage, listState: LazyListState) {
                 ) { next ->
                     formationButtonCount = next
                     page.preferences.edit().apply {
-                        // Absence is the canonical native-default state. It
-                        // also guarantees that equal-to-default has no hook.
                         if (next == nativeFormationDefault) {
                             remove(KEY_FORMATION_BUTTON_COUNT)
                         } else {
@@ -212,7 +218,6 @@ internal fun EnvironmentPage(page: SettingsPage, listState: LazyListState) {
                 ) { next ->
                     selectionPanelColumns = next
                     page.preferences.edit().apply {
-                        // The absent value is the native two-column state.
                         if (next == DEFAULT_SELECTION_PANEL_COLUMNS) {
                             remove(KEY_SELECTION_PANEL_COLUMNS)
                         } else {
@@ -233,6 +238,36 @@ internal fun EnvironmentPage(page: SettingsPage, listState: LazyListState) {
                     motherRally = it
                     page.preferences.edit()
                         .putBoolean(KEY_MOTHER_RALLY, it)
+                        .apply()
+                    page.refreshRuntimeHooks()
+                }
+            }
+        }
+        item(key = "smart-build-serialization") {
+            SectionCard(compact = true) {
+                SwitchSetting(
+                    "智能建造序列化",
+                    "使用模块框架处理建造序列，避免原版建造断链和跳过建造的问题",
+                    smartBuildSerialization
+                ) {
+                    smartBuildSerialization = it
+                    page.preferences.edit()
+                        .putBoolean(KEY_SMART_BUILD_SERIALIZATION, it)
+                        .apply()
+                    page.refreshRuntimeHooks()
+                }
+            }
+        }
+        item(key = "host-mute-panel") {
+            SectionCard(compact = true) {
+                SwitchSetting(
+                    "房主禁言面板",
+                    "仅房主可用：在界面右侧添加按钮，可在面板内禁言指定玩家",
+                    hostMutePanel
+                ) {
+                    hostMutePanel = it
+                    page.preferences.edit()
+                        .putBoolean(KEY_HOST_MUTE_PANEL, it)
                         .apply()
                     page.refreshRuntimeHooks()
                 }

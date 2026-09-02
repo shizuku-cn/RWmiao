@@ -1,5 +1,5 @@
 <resources>
-    <!-- Static dark-theme fallback for launchers below Android 12. -->
+    <!-- Static dark fallback below Android 12. / Android 12 以下的静态深色回退。 -->
     <color name="icon_background">#381E72</color>
     <color name="icon_foreground">#D0BCFF</color>
 </resources>

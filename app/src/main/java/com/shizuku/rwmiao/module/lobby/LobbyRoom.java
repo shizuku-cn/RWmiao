@@ -1,6 +1,5 @@
 package com.shizuku.rwmiao.module.lobby;
 
-/** Immutable UI snapshot of one native multiplayer lobby record. */
 public final class LobbyRoom {
     final Object nativeRecord;
     final String roomId;

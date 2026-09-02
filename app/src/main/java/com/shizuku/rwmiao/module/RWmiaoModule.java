@@ -15,10 +15,15 @@ import android.widget.Button;
 import com.shizuku.rwmiao.ui.main.SettingsPage;
 import com.shizuku.rwmiao.module.drawing.Drawing;
 import com.shizuku.rwmiao.module.freeselection.FreeSelection;
+import com.shizuku.rwmiao.module.freebuild.FreeBuild;
+import com.shizuku.rwmiao.module.selectall.SelectAll;
+import com.shizuku.rwmiao.module.playerinfo.PlayerInfoPanel;
 import com.shizuku.rwmiao.module.support.GameFrameDispatcher;
 import com.shizuku.rwmiao.module.support.GameTickDispatcher;
 import com.shizuku.rwmiao.module.script.ScriptManager;
 import com.shizuku.rwmiao.module.lobby.MultiplayerLobby;
+import com.shizuku.rwmiao.module.network.NetworkInfo;
+import com.shizuku.rwmiao.module.proxy.ProxyService;
 
 import static com.shizuku.rwmiao.config.SettingsContract.*;
 
@@ -38,28 +43,30 @@ public final class RWmiaoModule extends XposedModule {
     private static final String ORIGINAL_PREFIX = "com.corrodinggames.rts";
     private String targetPrefix = ORIGINAL_PREFIX;
     private String loadedPackageName;
-    // Keep clear of native and modified-build menu IDs (including the commonly used 23).
     private static final int MODULE_MENU_ID = 0x52574D;
     private static final String MAIN_MENU_BUTTON_TAG = "com.shizuku.rwmiao.main_menu_button";
 
     private final WeakHashMap<Activity, SettingsPage> modulePages = new WeakHashMap<>();
     private final java.util.Set<ClassLoader> installedLoaders =
             java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private final java.util.concurrent.CopyOnWriteArrayList<Runnable> gameResyncListeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private ClassLoader gameLoader;
-    /** Target-process context captured before the game engine singleton exists. */
     private volatile Context targetContext;
+    private volatile java.util.concurrent.ScheduledExecutorService activationHeartbeat;
     private volatile XposedInterface.HookHandle applicationAttachHook;
-    private final ThreadLocal<Boolean> economicRefresh = new ThreadLocal<>();
     private volatile Boolean viewAllState;
-    private volatile Boolean economicPanelState;
     private volatile Boolean factoryOptState;
     private volatile Activity lastActivity;
     private AutoReinforce reinforceFeature;
     private Drawing drawingFeature;
     private FreeSelection freeSelectionFeature;
+    private FreeBuild freeBuildFeature;
+    private SelectAll selectAllFeature;
+    private CombatView combatViewFeature;
     private NoFog noFogFeature;
     private ViewAll viewAllFeature;
-    private EconomicPanel economicPanelFeature;
+    private PlayerInfoPanel playerInfoPanelFeature;
     private FactoryOptimization factoryOptimizationFeature;
     private FactoryExitThrough factoryExitThroughFeature;
     private MotherRally motherRallyFeature;
@@ -67,16 +74,19 @@ public final class RWmiaoModule extends XposedModule {
     private SelectedUnitPanel selectedUnitPanelFeature;
     private FormationButtons formationButtonsFeature;
     private MultiplayerLobby multiplayerLobby;
+    private NetworkInfo networkInfoFeature;
+    private ProxyService proxyServiceFeature;
     private SegmentCommands segmentCommands;
     private SmartPathing smartPathing;
     private ScriptManager scriptManager;
     private GameLimits gameLimitsFeature;
     private BatchPlacement batchPlacementFeature;
     private RoomOptions hostRoomOptionsFeature;
+    private HostMutePanel hostMutePanelFeature;
     private Peek peekFeature;
+    private GameSyncTracker gameSyncTracker;
     private GameTickDispatcher tickDispatcher;
     private GameFrameDispatcher frameDispatcher;
-    /** Reflection contracts are immutable after the target class loader is ready. */
     private final java.util.concurrent.ConcurrentHashMap<FieldKey, Field> fieldCache =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Set<FieldKey> missingFields =
@@ -85,8 +95,6 @@ public final class RWmiaoModule extends XposedModule {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Set<MethodKey> missingMethods =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
-                 private volatile boolean selectionHookLogged;
-
     @Override
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         ClassLoader loader = param.getDefaultClassLoader();
@@ -102,7 +110,14 @@ public final class RWmiaoModule extends XposedModule {
         try {
             instance = this;
             gameLoader = loader;
+            startActivationHeartbeat();
             installApplicationBootstrap();
+            gameSyncTracker = new GameSyncTracker(this, loader);
+            try {
+                gameSyncTracker.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to install multiplayer resync lifecycle tracker", t);
+            }
             try {
                 hookMenu(loader);
             } catch (Throwable t) {
@@ -120,6 +135,12 @@ public final class RWmiaoModule extends XposedModule {
                 log(6, TAG, "Failed to install noFog setup hook", t);
             }
             try {
+                hostMutePanelFeature = new HostMutePanel(this, loader);
+                hostMutePanelFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "安装房主禁言面板失败", t);
+            }
+            try {
                 Peek feature = new Peek(this, loader);
                 feature.install();
                 peekFeature = feature;
@@ -133,10 +154,10 @@ public final class RWmiaoModule extends XposedModule {
                 log(6, TAG, "Failed to install view-all hook", t);
             }
             try {
-                economicPanelFeature = new EconomicPanel(this, loader);
-                economicPanelFeature.install();
+                playerInfoPanelFeature = new PlayerInfoPanel(this, loader);
+                playerInfoPanelFeature.install();
             } catch (Throwable t) {
-                log(6, TAG, "Failed to install economic panel hook", t);
+                log(6, TAG, "Failed to install player info panel", t);
             }
             try {
                 factoryOptimizationFeature = new FactoryOptimization(this, loader);
@@ -173,6 +194,24 @@ public final class RWmiaoModule extends XposedModule {
                 freeSelectionFeature.install();
             } catch (Throwable t) {
                 log(6, TAG, "Failed to install free-selection hooks", t);
+            }
+            try {
+                freeBuildFeature = new FreeBuild(this, loader);
+                freeBuildFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to install free-build hooks", t);
+            }
+            try {
+                selectAllFeature = new SelectAll(this, loader);
+                selectAllFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to resolve native select-all contract", t);
+            }
+            try {
+                combatViewFeature = new CombatView(this, loader);
+                combatViewFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to resolve combat-view contract", t);
             }
             try {
                 segmentCommands = new SegmentCommands(this, loader);
@@ -217,6 +256,18 @@ public final class RWmiaoModule extends XposedModule {
                 log(6, TAG, "Failed to install multiplayer M3 lobby feature", t);
             }
             try {
+                networkInfoFeature = new NetworkInfo(this, loader);
+                networkInfoFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to install network information feature", t);
+            }
+            try {
+                proxyServiceFeature = new ProxyService(this);
+                proxyServiceFeature.install();
+            } catch (Throwable t) {
+                log(6, TAG, "Failed to install proxy service feature", t);
+            }
+            try {
                 gameLimitsFeature = new GameLimits(this, loader);
                 gameLimitsFeature.install();
             } catch (Throwable t) {
@@ -234,11 +285,10 @@ public final class RWmiaoModule extends XposedModule {
             } catch (Throwable t) {
                 log(6, TAG, "Failed to install host room options feature", t);
             }
-            // Usually PackageLoaded precedes Application.attach(). Cover ports
-            // whose Application was initialized earlier as well.
             if (captureCurrentApplicationContext()) refreshFeatureHooks();
             log(4, TAG, "Rusted Warfare module hooks installed for " + loadedPackageName
                     + " using class prefix " + targetPrefix);
+            startModuleStartupUpdate();
         } catch (Throwable t) {
             synchronized (installedLoaders) {
                 installedLoaders.remove(loader);
@@ -247,11 +297,6 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
-    /**
-     * Application IDs differ between official builds and community ports, but
-     * the game's stable class contract. Probe the
-     * class loader instead of hard-coding one application package name.
-     */
     private boolean isRustedWarfareVariant(ClassLoader loader, String packageName) {
         if (loader == null) {
             return false;
@@ -279,14 +324,8 @@ public final class RWmiaoModule extends XposedModule {
                 targetPrefix = prefix;
                 return true;
             } catch (Throwable ignored) {
-                // Keep probing: repackaged APKs may preserve or rename the
-                // Java namespace independently of the Android application ID.
                          }
                      }
-                     // Some ports change both the application id and the Java
-                     // namespace. In that case the namespace cannot be derived
-                     // from PackageLoadedParam; inspect the loaded dex files for
-                     // the three stable Rusted Warfare entry classes instead.
                      String scanned = findGamePrefixInDex(loader);
                      if (scanned != null) {
                          targetPrefix = scanned;
@@ -362,12 +401,38 @@ public final class RWmiaoModule extends XposedModule {
         return freeSelectionFeature;
     }
 
+    FreeBuild freeBuildFeature() {
+        return freeBuildFeature;
+    }
+
+    SelectAll selectAllFeature() {
+        return selectAllFeature;
+    }
+
+    CombatView combatViewFeature() {
+        return combatViewFeature;
+    }
+
     MotherRally motherRallyFeature() {
         return motherRallyFeature;
     }
 
-    SegmentCommands segmentCommands() {
+    HostMutePanel hostMutePanelFeature() {
+        return hostMutePanelFeature;
+    }
+
+    public SegmentCommands segmentCommands() {
         return segmentCommands;
+    }
+
+    public void setFreeBuildQueueExpansion(boolean enabled) {
+        BatchPlacement feature = batchPlacementFeature;
+        if (feature == null) return;
+        try {
+            feature.setFreeBuildQueueExpansion(enabled);
+        } catch (Throwable t) {
+            log(5, TAG, "free-build queue expansion refresh failed", t);
+        }
     }
 
     SmartPathing smartPathing() {
@@ -377,6 +442,25 @@ public final class RWmiaoModule extends XposedModule {
     public synchronized GameTickDispatcher tickDispatcher() {
         if (tickDispatcher == null) tickDispatcher = new GameTickDispatcher(this);
         return tickDispatcher;
+    }
+
+    public long completedResyncGeneration() {
+        GameSyncTracker tracker = gameSyncTracker;
+        return tracker == null ? 0L : tracker.completedGeneration();
+    }
+
+    public void addGameResyncListener(Runnable listener) {
+        if (listener != null) gameResyncListeners.addIfAbsent(listener);
+    }
+
+    void notifyGameResyncCompleted() {
+        for (Runnable listener : gameResyncListeners) {
+            try {
+                listener.run();
+            } catch (Throwable t) {
+                log(5, TAG, "Module resync listener failed", t);
+            }
+        }
     }
 
     public synchronized GameFrameDispatcher frameDispatcher() {
@@ -395,7 +479,30 @@ public final class RWmiaoModule extends XposedModule {
             hook(resume).intercept(chain -> {
                 if (chain.getThisObject() instanceof Activity) {
                     lastActivity = (Activity) chain.getThisObject();
+                    if (playerInfoPanelFeature != null) {
+                        playerInfoPanelFeature.onResume((Activity) chain.getThisObject());
+                    }
+                    ModuleActivationReporter.report(
+                            (Activity) chain.getThisObject(), loadedPackageName);
                     refreshFeatureHooks();
+                }
+                return chain.proceed();
+            });
+        }
+        Method pause = findCompatibleMethod(activityClass, "onPause");
+        if (pause != null) {
+            hook(pause).intercept(chain -> {
+                if (playerInfoPanelFeature != null) {
+                    playerInfoPanelFeature.onPause(chain.getThisObject());
+                }
+                return chain.proceed();
+            });
+        }
+        Method destroy = findCompatibleMethod(activityClass, "onDestroy");
+        if (destroy != null) {
+            hook(destroy).intercept(chain -> {
+                if (playerInfoPanelFeature != null) {
+                    playerInfoPanelFeature.onDestroy(chain.getThisObject());
                 }
                 return chain.proceed();
             });
@@ -408,10 +515,8 @@ public final class RWmiaoModule extends XposedModule {
                 lastActivity = (Activity) chain.getThisObject();
             }
             Menu menu = (Menu) chain.getArg(0);
-            // The game's in-battle Menu implementation throws from findItem().
-            // Inspect its populated items instead, then append without clearing/rebuilding.
             if (menu != null && !containsMenuItem(menu, MODULE_MENU_ID)) {
-                menu.add(0, MODULE_MENU_ID, Menu.NONE, "模块页");
+                menu.add(0, MODULE_MENU_ID, Menu.NONE, "RW miao");
             }
             return result;
         });
@@ -425,11 +530,6 @@ public final class RWmiaoModule extends XposedModule {
         });
     }
 
-    /**
-     * Add a permanent entry point to the game's main menu.  The target menu is
-     * an Android XML layout, not the in-game options Menu, so it needs its own
-     * Activity hook and a real Button inserted into the existing button group.
-     */
     private void hookMainMenu(ClassLoader loader) throws Throwable {
         Class<?> activityClass = loader.loadClass(target("appFramework.MainMenuActivity"));
         Method create = findCompatibleMethod(activityClass, "onCreate", Bundle.class);
@@ -547,9 +647,14 @@ public final class RWmiaoModule extends XposedModule {
         if (page != null && page.getParent() instanceof ViewGroup) {
             ((ViewGroup) page.getParent()).removeView(page);
         }
+        refreshFeatureHooks();
     }
 
-    Activity currentActivity() {
+    public boolean isModulePageOpen(Activity activity) {
+        return activity != null && modulePages.containsKey(activity);
+    }
+
+    public Activity currentActivity() {
         if (lastActivity != null && !lastActivity.isFinishing()) return lastActivity;
         synchronized (modulePages) {
             for (Activity activity : modulePages.keySet()) {
@@ -574,6 +679,20 @@ public final class RWmiaoModule extends XposedModule {
         RWmiaoModule current = instance;
         if (current != null && current.drawingFeature != null) {
             current.drawingFeature.toggleSelected(false);
+        }
+    }
+
+    static void setSelectedRange(boolean enabled) {
+        RWmiaoModule current = instance;
+        if (current != null && current.drawingFeature != null) {
+            current.drawingFeature.setSelected(true, enabled);
+        }
+    }
+
+    static void setSelectedLine(boolean enabled) {
+        RWmiaoModule current = instance;
+        if (current != null && current.drawingFeature != null) {
+            current.drawingFeature.setSelected(false, enabled);
         }
     }
 
@@ -602,27 +721,69 @@ public final class RWmiaoModule extends XposedModule {
                 ? "自由框选" : current.freeSelectionFeature.titleForSelection();
     }
 
-    /** Select the native statistics panel data source without changing game
-     * simulation or network state. */
-    private void refreshEconomicPanel(ClassLoader loader) {
-        try {
-            refreshFeatureHooks();
-            Object engine = findEngine(loader);
-            Class<?> mode = loader.loadClass(target("gameFramework.g.g"));
-            Method setMode = findCompatibleMethod(engine.getClass(), "a", mode, int.class);
-            if (setMode != null) {
-                applyEconomicPanel(engine, setMode, mode, economicPanelEnabled(loader));
-            }
-        } catch (Throwable t) {
-            log(5, TAG, "Failed to refresh economic panel", t);
+    public static void toggleFreeBuild(Object unit) {
+        RWmiaoModule current = instance;
+        if (current != null && current.freeBuildFeature != null) {
+            current.freeBuildFeature.toggleMode(unit);
         }
     }
 
-    private void applyEconomicPanel(Object engine, Method setMode,
-                                    Class<?> mode, boolean enabled) throws Throwable {
-        Object selected = enumValue(mode, enabled ? "income" : "none");
-        if (selected != null) {
-            setMode.invoke(engine, selected, 3);
+    public static String freeBuildTitle() {
+        RWmiaoModule current = instance;
+        return current == null || current.freeBuildFeature == null
+                ? "自由建造" : current.freeBuildFeature.titleForSelection();
+    }
+
+    public static void selectAllUnits() {
+        RWmiaoModule current = instance;
+        if (current != null && current.selectAllFeature != null) {
+            current.selectAllFeature.selectAll();
+        }
+    }
+
+    public static void jumpToNextCombat() {
+        RWmiaoModule current = instance;
+        if (current != null && current.combatViewFeature != null) {
+            current.combatViewFeature.jumpToNextCombat();
+        }
+    }
+
+    public static NetworkInfo.Snapshot networkInfoSnapshot() {
+        RWmiaoModule current = instance;
+        if (current == null || current.networkInfoFeature == null) {
+            return NetworkInfo.Snapshot.emptyForUi();
+        }
+        try {
+            return current.networkInfoFeature.snapshot();
+        } catch (Throwable ignored) {
+            return NetworkInfo.Snapshot.emptyForUi();
+        }
+    }
+
+    public static String networkInfoText() {
+        return networkInfoSnapshot().toDisplayTextForUi("（未查询）");
+    }
+
+    public static String networkPublicIp() {
+        RWmiaoModule current = instance;
+        if (current == null || current.networkInfoFeature == null) return "（查询失败）";
+        try {
+            if (current.proxyServiceFeature != null
+                    && current.proxyServiceFeature.isRequested()) {
+                String proxyIp = current.proxyServiceFeature.queryPublicIp();
+                return proxyIp == null || proxyIp.isEmpty() ? "（代理不可用）" : proxyIp;
+            }
+            return current.networkInfoFeature.queryPublicIp();
+        } catch (Throwable ignored) {
+            return "（查询失败）";
+        }
+    }
+
+    private void refreshPlayerInfoPanel(ClassLoader loader) {
+        try {
+            refreshFeatureHooks();
+        } catch (Throwable t) {
+            log(5, TAG, "Failed to refresh player info panel", t);
         }
     }
 
@@ -637,15 +798,28 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
+    public int uiThemeMode() {
+        return preferenceInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM);
+    }
+
+    public int uiColorMode() {
+        return preferenceInt(KEY_UI_COLOR_MODE, UI_COLOR_DEFAULT);
+    }
+
+    int selectionActionScaleMask() {
+        return preferenceInt(KEY_SELECTION_ACTION_SCALE_MASK, 0) & SELECTION_ACTION_SCALE_ALL;
+    }
+
+    int volumeAction() {
+        return Math.max(VOLUME_ACTION_NONE,
+                Math.min(VOLUME_ACTION_LINE,
+                        preferenceInt(KEY_VOLUME_ACTION, VOLUME_ACTION_NONE)));
+    }
+
     boolean hasDrawableSelection(ClassLoader loader) {
         return drawingFeature != null && drawingFeature.hasDrawableSelection();
     }
 
-    /**
-     * Custom actions are inserted immediately before the UI's built-in m/n
-     * actions. Those fields are package-private, so the target-loader payload
-     * must not access them directly from its separate class loader.
-     */
     int findSelectionActionInsertIndex(ArrayList<?> actions) {
         try {
             Object engine = findEngine(gameLoader);
@@ -674,7 +848,7 @@ public final class RWmiaoModule extends XposedModule {
         SettingsPage page = new SettingsPage(
                 activity,
                 () -> removeModulePage(activity),
-                () -> refreshEconomicPanel(loader),
+                () -> refreshPlayerInfoPanel(loader),
                 scriptManager);
         modulePages.put(activity, page);
         activity.addContentView(page, new ViewGroup.LayoutParams(
@@ -713,32 +887,6 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
-    boolean economicPanelEnabled(ClassLoader loader) {
-        Boolean cached = economicPanelState;
-        if (cached != null) return cached;
-        try {
-            Context context = preferenceContext();
-            if (context == null) return false;
-            boolean enabled = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_ECONOMIC_PANEL, false);
-            economicPanelState = enabled;
-            return enabled;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    void applyEconomicPanelIfEnabled(ClassLoader loader, Object engine,
-                                     Method setMode, Class<?> mode) throws Throwable {
-        if (!economicPanelEnabled(loader) || Boolean.TRUE.equals(economicRefresh.get())) return;
-        economicRefresh.set(true);
-        try {
-            applyEconomicPanel(engine, setMode, mode, true);
-        } finally {
-            economicRefresh.remove();
-        }
-    }
-
     boolean factoryOptimizationEnabled(ClassLoader loader) {
         Boolean cached = factoryOptState;
         if (cached != null) return cached;
@@ -765,6 +913,17 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
+    public boolean preferenceBoolean(String key, boolean defaultValue) {
+        try {
+            Context context = preferenceContext();
+            if (context == null) return defaultValue;
+            return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(key, defaultValue);
+        } catch (Throwable ignored) {
+            return defaultValue;
+        }
+    }
+
     public Object findEngine(ClassLoader loader) throws Throwable {
         Class<?> engineClass = loader.loadClass(target("gameFramework.k"));
         Method getEngine = engineClass.getDeclaredMethod("t");
@@ -772,7 +931,6 @@ public final class RWmiaoModule extends XposedModule {
         return getEngine.invoke(null);
     }
 
-    /** Called by the settings UI to display the current target build default. */
     public static int defaultFormationButtonCount() {
         RWmiaoModule current = instance;
         if (current == null || current.formationButtonsFeature == null) return 3;
@@ -783,7 +941,6 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
-    /** Preferences remain available before the engine singleton is created. */
     public Context preferenceContext() {
         Context context = targetContext;
         if (context != null) return context;
@@ -862,12 +1019,6 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
-    /**
-     * Formation count uses preference presence as its explicit enable flag.
-     * This avoids installing the renderer hook while the target engine is
-     * still being created, while still allowing a non-default choice to
-     * install before the first render frame can expose the formation panel.
-     */
     boolean preferenceContains(String key) {
         try {
             Context context = preferenceContext();
@@ -878,25 +1029,20 @@ public final class RWmiaoModule extends XposedModule {
         }
     }
 
-    /**
-     * Resolve feature switches as soon as the target Application has a Context.
-     * The game engine singleton is not available during PackageLoaded, so using
-     * it as the only preference source delayed enabled hooks until the first
-     * InGameActivity resume (after the first match had already started).
-     *
-     * This one-shot bootstrap removes itself before gameplay; disabled feature
-     * hooks therefore remain absent from the hot path.
-     */
     private void installApplicationBootstrap() {
         if (captureCurrentApplicationContext()) return;
         try {
             Method attach = Application.class.getDeclaredMethod("attach", Context.class);
             applicationAttachHook = hookExecutable(attach, chain -> {
-                Object result = chain.proceed();
                 Object argument = chain.getArg(0);
+                if (argument instanceof Context) {
+                    ModuleActivationReporter.report((Context) argument, loadedPackageName);
+                }
+                Object result = chain.proceed();
                 if (argument instanceof Context) {
                     setTargetContext((Context) argument);
                     refreshFeatureHooks();
+                    startModuleStartupUpdate();
                 }
                 XposedInterface.HookHandle handle = applicationAttachHook;
                 applicationAttachHook = null;
@@ -927,19 +1073,48 @@ public final class RWmiaoModule extends XposedModule {
     private void setTargetContext(Context context) {
         Context application = context == null ? null : context.getApplicationContext();
         targetContext = application != null ? application : context;
+        ModuleActivationReporter.report(targetContext, loadedPackageName);
     }
 
-    /** Synchronize hook presence with feature switches; disabled features leave no hot hook. */
+    private void startModuleStartupUpdate() {
+        Context context = targetContext;
+        if (context == null) return;
+        try {
+            com.shizuku.rwmiao.ui.main.ModuleStartupUpdate.start(context);
+        } catch (Throwable t) {
+            log(5, TAG, "Automatic update check failed to start", t);
+        }
+    }
+
+    private void startActivationHeartbeat() {
+        if (activationHeartbeat != null) return;
+        synchronized (this) {
+            if (activationHeartbeat != null) return;
+            java.util.concurrent.ScheduledExecutorService scheduler =
+                    java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                        Thread thread = new Thread(r, "RWmiao-activation-heartbeat");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+            activationHeartbeat = scheduler;
+            scheduler.scheduleAtFixedRate(() -> {
+                Context context = targetContext;
+                if (context != null) {
+                    ModuleActivationReporter.report(context, loadedPackageName);
+                }
+            }, 0L, 20L, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
     private void refreshFeatureHooks() {
         viewAllState = null;
-        economicPanelState = null;
         factoryOptState = null;
         try { if (noFogFeature != null) noFogFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "noFog hook refresh failed", t); }
         try { if (viewAllFeature != null) viewAllFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "view-all hook refresh failed", t); }
-        try { if (economicPanelFeature != null) economicPanelFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "economic panel hook refresh failed", t); }
+        try { if (playerInfoPanelFeature != null) playerInfoPanelFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "player info panel refresh failed", t); }
         try { if (factoryOptimizationFeature != null) factoryOptimizationFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "factory hook refresh failed", t); }
         try { if (factoryExitThroughFeature != null) factoryExitThroughFeature.refreshSettings(); }
@@ -956,6 +1131,12 @@ public final class RWmiaoModule extends XposedModule {
         catch (Throwable t) { log(5, TAG, "drawing hook refresh failed", t); }
         try { if (freeSelectionFeature != null) freeSelectionFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "free-selection hook refresh failed", t); }
+        try { if (freeBuildFeature != null) freeBuildFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "free-build hook refresh failed", t); }
+        try { if (combatViewFeature != null) combatViewFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "combat-view refresh failed", t); }
+        try { if (hostMutePanelFeature != null) hostMutePanelFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "host-mute panel hook refresh failed", t); }
         try { if (peekFeature != null) peekFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "peek hook refresh failed", t); }
         try { if (scriptManager != null) scriptManager.refreshSettings(); }
@@ -974,9 +1155,12 @@ public final class RWmiaoModule extends XposedModule {
         catch (Throwable t) { log(5, TAG, "formation button hook refresh failed", t); }
         try { if (multiplayerLobby != null) multiplayerLobby.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "multiplayer lobby hook refresh failed", t); }
+        try { if (networkInfoFeature != null) networkInfoFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "network information hook refresh failed", t); }
+        try { if (proxyServiceFeature != null) proxyServiceFeature.refreshSettings(); }
+        catch (Throwable t) { log(5, TAG, "proxy service hook refresh failed", t); }
     }
 
-    /** Script inventory/preferences changed; keep the selection action hook in sync immediately. */
     public void refreshScriptSelectionAction() {
         try { if (selectionActionsFeature != null) selectionActionsFeature.refreshSettings(); }
         catch (Throwable t) { log(5, TAG, "script selection hook refresh failed", t); }

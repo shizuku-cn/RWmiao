@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.widget.Toast;
 
 import com.shizuku.rwmiao.module.RWmiaoModule;
+import com.shizuku.rwmiao.module.SimulationLifecycle;
 import com.shizuku.rwmiao.module.support.GameTickDispatcher;
 import com.shizuku.rwmiao.ui.support.RuntimePanels;
 
@@ -41,27 +42,11 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_SCRIPT_ENABLED_PREF
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_SCRIPTS_MASTER;
 import static com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME;
 
-/** Script storage, executable Lua VMs, unit bindings and deterministic tick execution. */
 public final class ScriptManager {
     private static final String TAG = "RWmiaoScript";
     private static final String IMPORT_TAG = "rwmiao.script.import";
     private static final int MAX_SOURCE_BYTES = 256 * 1024;
     private static final String SETTING_PREFIX="rwmiao_script_setting_";
-    private static final String SAMPLE = "-- Lua 决定全部判断和操作；框架只提供快照和原生命令。\n"
-            + "rw.script{api=1,id=\"mech_minigun_kite_mammoth\",name=\"机枪机甲风筝猛犸坦克\",units={\"mechMinigun\"},data={\"position\",\"movement\",\"combat\"}}\n"
-            + "local target_types={mammothTank=true,c_mammothTank=true}\n"
-            + "rw.on_tick(6,function(ctx)\n"
-            + "  for _,u in ipairs(ctx:self_units()) do\n"
-            + "    local e=ctx:nearest_enemy(u,{types={\"mammothTank\",\"c_mammothTank\"},range=900})\n"
-            + "    if e then\n"
-            + "      local d=rw.distance(u,e)\n"
-            + "      if d < math.max(90,u.attack_range*0.72) then\n"
-            + "        local p=rw.away(u,e,math.max(70,u.attack_range*0.45)); ctx:move(u,p.x,p.y)\n"
-            + "      else ctx:attack(u,e) end\n"
-            + "    end\n"
-            + "  end\n"
-            + "end)\n";
-
     public static final class Record {
         public final String id, name, fileName, units;
         public final boolean enabled, hasSettings;
@@ -82,7 +67,6 @@ public final class ScriptManager {
     private final GameAdapter adapter;
     private final CommandGateway commands;
     private final LinkedHashMap<String,RuntimeScript> scripts=new LinkedHashMap<>();
-    /** Only enabled bindings are stored: O(1) due checks and no false-entry buildup. */
     private final Map<String,LinkedHashSet<Long>> unitBindings=new HashMap<>();
     private final Map<String,Map<Long,String>> unitGroups=new HashMap<>();
     private long nextGroupId;
@@ -93,64 +77,65 @@ public final class ScriptManager {
     private File directory;
     private long directoryStamp;
     private volatile boolean loaded;
-    private int lastTick=Integer.MIN_VALUE;
+    private final SimulationLifecycle simulationLifecycle=new SimulationLifecycle();
     private volatile Runnable uiChanged;
     private volatile Boolean masterCache;
     private volatile boolean hookStateDirty;
     private final ArrayList<Method> tickMethods=new ArrayList<>();
     private final ArrayList<GameTickDispatcher.Registration> tickHooks=new ArrayList<>();
+    private final ArrayList<RuntimeScript> dueScratch=new ArrayList<>();
+    private final LinkedHashSet<String> requestedDataScratch=new LinkedHashSet<>();
 
     public ScriptManager(RWmiaoModule host,ClassLoader loader)throws Throwable{
         this.host=host;this.loader=loader;adapter=new GameAdapter(host,loader);commands=new CommandGateway(host,loader,adapter);
     }
     public void install()throws Throwable{
-        try{if(ensureStorage())reload();}catch(Throwable t){Log.i(TAG,"Script storage will initialize on first game tick",t);}
+        try{if(ensureStorage())reload();}catch(Throwable ignored){}
         Class<?> queue=loader.loadClass(host.target("gameFramework.c"));
         Method single=host.findNoArgMethod(queue,"c"),multi=host.findNoArgMethod(queue,"d");
         if(single==null&&multi==null)throw new NoSuchMethodException("command queue tick c/d");
         if(single!=null)tickMethods.add(single);if(multi!=null&&multi!=single)tickMethods.add(multi);
         refreshSettings();
-        Log.i(TAG,"Executable Lua framework installed, capabilities="+adapter.capabilities());
     }
     public synchronized void refreshSettings(){
         masterCache=null;
         boolean loadedNow=false;
-        if(context==null||!loaded)try{if(ensureStorage()&&!loaded){reload();loadedNow=true;}}catch(Throwable t){Log.i(TAG,"Script storage is not ready",t);}
+        if(context==null||!loaded)try{if(ensureStorage()&&!loaded){reload();loadedNow=true;}}catch(Throwable ignored){}
         if(masterEnabled()&&hasRunnableBindings()){
             if(tickHooks.isEmpty())for(Method method:tickMethods)tickHooks.add(host.tickDispatcher().register(method,queue->{try{tick();}catch(Throwable t){Log.e(TAG,"script tick skipped",t);}}));
         }else{
             for(GameTickDispatcher.Registration handle:tickHooks)try{handle.close();}catch(Throwable ignored){}
-            tickHooks.clear();lastTick=Integer.MIN_VALUE;
+            tickHooks.clear();simulationLifecycle.reset(host.completedResyncGeneration());
         }
         if(loadedNow)host.refreshScriptSelectionAction();
     }
     private void tick()throws Throwable{
         if(context==null&&!ensureStorage())return;if(!loaded&&directory!=null)reload();
-        // Master-off path performs no engine tick read, registry scan or Lua work.
         if(!masterEnabled())return;
-        int currentTick=adapter.currentTick();if(currentTick<0||currentTick==lastTick)return;
-        if(lastTick!=Integer.MIN_VALUE&&currentTick<lastTick)clearMatchState();lastTick=currentTick;
-        // File I/O is not gameplay work; poll at most once per 180 simulation ticks.
-        if(currentTick%180==0)maybeReload();
-        ArrayList<RuntimeScript> due=new ArrayList<>();
-        LinkedHashSet<String> requestedData=new LinkedHashSet<>();
+        int currentTick=adapter.currentTick();
+        SimulationLifecycle.Observation observation=simulationLifecycle.observe(
+                currentTick,host.completedResyncGeneration());
+        if(observation==SimulationLifecycle.Observation.INVALID
+                ||observation==SimulationLifecycle.Observation.DUPLICATE)return;
+        if(observation==SimulationLifecycle.Observation.NEW_MATCH)clearMatchState();
+        else if(observation==SimulationLifecycle.Observation.RESYNC)prepareAfterResync();
+        ArrayList<RuntimeScript> due=dueScratch;due.clear();
+        LinkedHashSet<String> requestedData=requestedDataScratch;requestedData.clear();
         synchronized(lock){for(RuntimeScript runtime:scripts.values()){
             ScriptDefinition d=runtime.definition();if(runtime.runtimeDisabled||!isEnabled(d.id)
                     ||!hasEnabledUnits(d)||!runtime.program.due(currentTick))continue;
             due.add(runtime);
             requestedData.addAll(d.dataGroups);
         }}
-        // The expensive global registry snapshot is created only when a real callback is due.
         if(due.isEmpty()){if(hookStateDirty){hookStateDirty=false;refreshSettings();}return;}
         GameSnapshot snapshot=adapter.snapshot(requestedData);if(snapshot.tick<0)return;
-        LinkedHashSet<Long> aliveOwnIds=new LinkedHashSet<>();for(UnitSnapshot unit:snapshot.units)if(unit.relation==0&&!unit.dead&&!unit.deleted)aliveOwnIds.add(unit.id);
-        synchronized(lock){java.util.Iterator<Map.Entry<String,LinkedHashSet<Long>>> it=unitBindings.entrySet().iterator();while(it.hasNext()){Map.Entry<String,LinkedHashSet<Long>> entry=it.next();LinkedHashSet<Long> bindings=entry.getValue();int before=bindings.size();bindings.retainAll(aliveOwnIds);if(before!=bindings.size())hookStateDirty=true;Map<Long,String> groups=unitGroups.get(entry.getKey());if(groups!=null)groups.keySet().retainAll(aliveOwnIds);if(bindings.isEmpty()){it.remove();unitGroups.remove(entry.getKey());}}}
-        synchronized(lock){for(RuntimeScript runtime:due){
+        synchronized(lock){java.util.Iterator<Map.Entry<String,LinkedHashSet<Long>>> it=unitBindings.entrySet().iterator();while(it.hasNext()){Map.Entry<String,LinkedHashSet<Long>> entry=it.next();LinkedHashSet<Long> bindings=entry.getValue();Map<Long,String> groups=unitGroups.get(entry.getKey());java.util.Iterator<Long> ids=bindings.iterator();while(ids.hasNext()){Long id=ids.next();UnitSnapshot unit=snapshot.get(id);if(unit==null||unit.relation!=0||unit.dead||unit.deleted){ids.remove();if(groups!=null)groups.remove(id);hookStateDirty=true;}}if(bindings.isEmpty()){it.remove();unitGroups.remove(entry.getKey());}}}
+        for(RuntimeScript runtime:due){
             ScriptDefinition d=runtime.definition();
+            synchronized(lock){if(scripts.get(d.id)!=runtime||runtime.runtimeDisabled||!isEnabled(d.id)||!hasEnabledUnits(d))continue;}
             try{runtime.program.tick(snapshot,commands,new LuaProgram.UnitPolicy(){public boolean enabled(UnitSnapshot u){return unitEnabled(d,u.id);}public void finish(long id){finishUnit(d,id);}public String group(long id){return unitGroup(d,id);}public void exit(String message){exitScript(d,message);}},settingsFor(d));}
-            catch(Throwable t){Log.e(TAG,"Lua callback failed: "+d.id,t);if(t.getMessage()!=null&&t.getMessage().contains("连续 3 次")){runtime.runtimeDisabled=true;hookStateDirty=true;Log.e(TAG,"Lua script auto-disabled for this match: "+d.id);}}
-        }}
-        // finish/exit/death can remove the last binding. Immediately remove both hot-path hooks.
+            catch(Throwable t){Log.e(TAG,"Lua callback failed: "+d.id,t);if(t.getMessage()!=null&&t.getMessage().contains("连续 3 次")){synchronized(lock){runtime.runtimeDisabled=true;}hookStateDirty=true;Log.e(TAG,"Lua script auto-disabled for this match: "+d.id);}}
+        }
         if(hookStateDirty){hookStateDirty=false;refreshSettings();}
     }
 
@@ -167,8 +152,6 @@ public final class ScriptManager {
             File file=new File(directory,removed.definition().sourceName);
             if(file.isFile()&&!file.delete())throw new IOException("无法删除脚本文件："+file.getName());
             synchronized(lock){
-                // A hot reload can replace a VM while the confirmation dialog is open.
-                // Only remove the record when it still represents the confirmed script.
                 RuntimeScript current=scripts.get(id);if(current!=null&&current.definition().sourceName.equals(removed.definition().sourceName))scripts.remove(id);
                 unitBindings.remove(id);unitGroups.remove(id);enabledCache.remove(id);settingCache.remove(id);
             }
@@ -192,7 +175,7 @@ public final class ScriptManager {
         });
     }
 
-    private Map<String,Object> settingsFor(ScriptDefinition d){Map<String,Object> cached=settingCache.get(d.id);if(cached!=null)return cached;LinkedHashMap<String,Object> out=new LinkedHashMap<>();for(ScriptSetting setting:d.settings){String value=rawSetting(d,setting);Object typed=value;if(ScriptSetting.BOOLEAN.equals(setting.type))typed=Boolean.parseBoolean(value);else if(ScriptSetting.NUMBER.equals(setting.type))try{typed=Double.parseDouble(value);}catch(Throwable ignored){typed=0d;}out.put(setting.key,typed);}cached=Collections.unmodifiableMap(out);settingCache.put(d.id,cached);return cached;}
+    private Map<String,Object> settingsFor(ScriptDefinition d){Map<String,Object> cached;synchronized(lock){cached=settingCache.get(d.id);}if(cached!=null)return cached;LinkedHashMap<String,Object> out=new LinkedHashMap<>();for(ScriptSetting setting:d.settings){String value=rawSetting(d,setting);Object typed=value;if(ScriptSetting.BOOLEAN.equals(setting.type))typed=Boolean.parseBoolean(value);else if(ScriptSetting.NUMBER.equals(setting.type))try{typed=Double.parseDouble(value);}catch(Throwable ignored){typed=0d;}out.put(setting.key,typed);}Map<String,Object> created=Collections.unmodifiableMap(out);synchronized(lock){cached=settingCache.get(d.id);if(cached==null){settingCache.put(d.id,created);cached=created;}}return cached;}
     private String rawSetting(ScriptDefinition d,ScriptSetting setting){return context==null?setting.defaultValue:preferences().getString(settingKey(d.id,setting.key),setting.defaultValue);}
     private static String settingKey(String id,String key){return SETTING_PREFIX+id+"_"+key;}
 
@@ -200,20 +183,17 @@ public final class ScriptManager {
         if(changed!=null)uiChanged=changed;if(context==null){context=activity;directory=new File(context.getFilesDir(),"rwmiao/scripts");if(!directory.isDirectory())directory.mkdirs();try{reload();}catch(Throwable t){Log.e(TAG,"Unable to initialize script storage",t);}}
         ImportFragment fragment=(ImportFragment)activity.getFragmentManager().findFragmentByTag(IMPORT_TAG);
         if(fragment==null){fragment=new ImportFragment();activity.getFragmentManager().beginTransaction().add(fragment,IMPORT_TAG).commitAllowingStateLoss();activity.getFragmentManager().executePendingTransactions();}
-        fragment.manager=this;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType("text/x-lua");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"text/x-lua","application/x-lua","application/octet-stream"});
+        fragment.manager=this;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);fragment.startActivityForResult(intent,ImportFragment.REQUEST);
     }
     void importUris(Activity activity,List<Uri> uris){if(activity==null||uris==null||uris.isEmpty())return;int success=0;ArrayList<String> errors=new ArrayList<>();ArrayList<String> enabledIds=new ArrayList<>();
         try{if(!ensureStorage())throw new IOException("脚本目录尚未就绪");int count=Math.min(32,uris.size());for(int i=0;i<count;i++){Uri uri=uris.get(i);String display=queryName(activity,uri);if(display==null)display=uri.getLastPathSegment();try{
-                if(display==null||!display.toLowerCase(java.util.Locale.ROOT).endsWith(".lua"))throw new IOException("只允许导入 .lua 文件");
                 try(InputStream input=activity.getContentResolver().openInputStream(uri)){if(input==null)throw new IOException("无法打开文件");String source=read(input);LuaProgram checked=LuaProgram.compile(source,display);String fileName=checked.definition.id+".lua";File temp=new File(directory,fileName+".tmp");write(temp,source);LuaProgram.compile(read(new FileInputStream(temp)),fileName);File target=new File(directory,fileName);if(target.exists()&&!target.delete())throw new IOException("无法替换旧脚本");if(!temp.renameTo(target))throw new IOException("无法保存脚本");enabledIds.add(checked.definition.id);success++;}
             }catch(Throwable t){Log.e(TAG,"Import failed: "+display,t);errors.add((display==null?"未知文件":display)+"："+rootMessage(t));}}
-            if(uris.size()>32)errors.add("一次最多导入 32 个文件");if(success>0){reload();for(String id:enabledIds){synchronized(lock){enabledCache.put(id,true);}preferences().edit().putBoolean(KEY_SCRIPT_ENABLED_PREFIX+id,true).apply();}refreshSettings();host.refreshScriptSelectionAction();}
+            if(uris.size()>32)errors.add("一次最多导入 32 个文件");if(success>0){reload();SharedPreferences.Editor editor=preferences().edit();for(String id:enabledIds){synchronized(lock){enabledCache.put(id,true);}editor.putBoolean(KEY_SCRIPT_ENABLED_PREFIX+id,true);}editor.apply();refreshSettings();host.refreshScriptSelectionAction();}
         }catch(Throwable t){Log.e(TAG,"Import batch failed",t);errors.add(rootMessage(t));}
         String message=success>0?"已导入并启用 "+success+" 个 Lua 脚本":"没有导入脚本";if(!errors.isEmpty())message+="\n失败 "+errors.size()+" 个："+errors.get(0);Toast.makeText(activity,message,Toast.LENGTH_LONG).show();notifyUiChanged();}
 
-    /** Loads private scripts when the module page becomes visible, without relying on a game Tick. */
     public void setUiListener(Runnable listener){uiChanged=listener;}
     public void clearUiListener(Runnable listener){if(uiChanged==listener)uiChanged=null;}
     public void refreshForUi(){new Thread(()->{try{if(ensureStorage()){if(!loaded)reload();else maybeReload();}}catch(Throwable t){Log.e(TAG,"Unable to refresh script list",t);}notifyUiChanged();},"RWmiao-script-list").start();}
@@ -251,7 +231,6 @@ public final class ScriptManager {
                 ScriptDefinition definition = applicable.get(i).definition();
                 int enabledCount=0;for(Long id:selectedIds)if(unitEnabled(definition,id))enabledCount++;
                 labels[i] = definition.name+(enabledCount>0&&enabledCount<selectedIds.size()?"（部分已启用）":"");
-                // Mixed state starts checked: pressing Apply expands the binding to the whole selection.
                 pending[i]=enabledCount>0;
             }
             RuntimePanels.showScriptManager(
@@ -276,13 +255,14 @@ public final class ScriptManager {
             Toast.makeText(activity, "无法打开脚本管理：" + rootMessage(t), Toast.LENGTH_LONG).show();
         }
     }
-    private boolean unitEnabled(ScriptDefinition d,long id){LinkedHashSet<Long> ids=unitBindings.get(d.id);return ids!=null&&ids.contains(id);}
-    private boolean hasEnabledUnits(ScriptDefinition d){LinkedHashSet<Long> ids=unitBindings.get(d.id);return ids!=null&&!ids.isEmpty();}
+    private boolean unitEnabled(ScriptDefinition d,long id){synchronized(lock){LinkedHashSet<Long> ids=unitBindings.get(d.id);return ids!=null&&ids.contains(id);}}
+    private boolean hasEnabledUnits(ScriptDefinition d){synchronized(lock){LinkedHashSet<Long> ids=unitBindings.get(d.id);return ids!=null&&!ids.isEmpty();}}
     private boolean hasRunnableBindings(){synchronized(lock){for(RuntimeScript r:scripts.values())if(!r.runtimeDisabled&&isEnabled(r.definition().id)&&hasEnabledUnits(r.definition()))return true;}return false;}
-    private String unitGroup(ScriptDefinition d,long id){Map<Long,String> groups=unitGroups.get(d.id);return groups==null?null:groups.get(id);}
-    private void finishUnit(ScriptDefinition d,long id){LinkedHashSet<Long> ids=unitBindings.get(d.id);if(ids!=null&&ids.remove(id)){hookStateDirty=true;if(ids.isEmpty())unitBindings.remove(d.id);}Map<Long,String> groups=unitGroups.get(d.id);if(groups!=null){groups.remove(id);if(groups.isEmpty())unitGroups.remove(d.id);}}
-    private void exitScript(ScriptDefinition d,String message){if(unitBindings.remove(d.id)!=null)hookStateDirty=true;unitGroups.remove(d.id);if(message!=null&&!message.trim().isEmpty())adapter.localMessage("["+d.name+"] "+message.trim());}
+    private String unitGroup(ScriptDefinition d,long id){synchronized(lock){Map<Long,String> groups=unitGroups.get(d.id);return groups==null?null:groups.get(id);}}
+    private void finishUnit(ScriptDefinition d,long id){synchronized(lock){LinkedHashSet<Long> ids=unitBindings.get(d.id);if(ids!=null&&ids.remove(id)){hookStateDirty=true;if(ids.isEmpty())unitBindings.remove(d.id);}Map<Long,String> groups=unitGroups.get(d.id);if(groups!=null){groups.remove(id);if(groups.isEmpty())unitGroups.remove(d.id);}}}
+    private void exitScript(ScriptDefinition d,String message){synchronized(lock){if(unitBindings.remove(d.id)!=null)hookStateDirty=true;unitGroups.remove(d.id);}if(message!=null&&!message.trim().isEmpty())adapter.localMessage("["+d.name+"] "+message.trim());}
     private void clearMatchState(){synchronized(lock){unitBindings.clear();unitGroups.clear();adapter.clearTransientState();for(RuntimeScript r:scripts.values()){r.program.resetTickState();r.runtimeDisabled=false;}}refreshSettings();}
+    private void prepareAfterResync(){synchronized(lock){adapter.clearTransientState();for(RuntimeScript r:scripts.values())r.program.resetTickState();}}
     private boolean ensureStorage()throws Throwable{context=host.preferenceContext();if(context==null)return false;directory=new File(context.getFilesDir(),"rwmiao/scripts");if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建脚本目录");File marker=new File(directory,".defaults_install_stamp");android.content.pm.ApplicationInfo moduleInfo=host.getModuleApplicationInfo();File moduleApk=moduleInfo==null||moduleInfo.sourceDir==null?null:new File(moduleInfo.sourceDir);String installStamp=moduleApk==null?"unknown":moduleApk.getAbsolutePath()+":"+moduleApk.lastModified()+":"+moduleApk.length();
         String previous=marker.isFile()?read(new FileInputStream(marker)):null;
         if(!installStamp.equals(previous)){
@@ -291,7 +271,6 @@ public final class ScriptManager {
         }
         return true;}
 
-    /** Copies APK-root Config/Scripts only once; runtime always executes private copies. */
     private void seedPackagedScripts() throws IOException {
         android.content.pm.ApplicationInfo info=host.getModuleApplicationInfo();
         if(info==null||info.sourceDir==null)return;

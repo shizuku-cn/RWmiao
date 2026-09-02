@@ -2,7 +2,6 @@ package com.shizuku.rwmiao.module.drawing;
 
 import com.shizuku.rwmiao.module.RWmiaoModule;
 
-/** Draws the selected unit's attack radius. Kept separate from the frame coordinator. */
 final class AttackRangeDrawing {
     private final RWmiaoModule host;
 

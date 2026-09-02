@@ -10,16 +10,6 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_SELECTION_PANEL_COL
 import static com.shizuku.rwmiao.config.SettingsContract.MAX_SELECTION_PANEL_COLUMNS;
 import static com.shizuku.rwmiao.config.SettingsContract.MIN_SELECTION_PANEL_COLUMNS;
 
-/**
- * Expands the native selected-unit action panel without shrinking its buttons.
- *
- * <p>The game computes a default action cell width as {@code panelWidth / 2}.
- * The renderer also accepts an action-provided column count through
- * {@code game.units.a.s.m()}. When this feature is enabled, the panel width is
- * scaled to {@code columns / 2} and every normal action reports the requested
- * number of columns, so each cell keeps the native width while new columns
- * extend beyond the original panel area.</p>
- */
 final class SelectedUnitPanel {
     private static final String TAG = "RWmiao";
     private final RWmiaoModule host;
@@ -28,8 +18,6 @@ final class SelectedUnitPanel {
     private XposedInterface.HookHandle renderHook;
     private XposedInterface.HookHandle baseActionColumnsHook;
     private XposedInterface.HookHandle wrappedActionColumnsHook;
-    // Resolve the three reflective fields once at install time, not on every
-    // selected-panel update.
     private Field rendererEngineField;
     private Field enginePanelBoundsField;
     private Field panelWidthField;
@@ -44,7 +32,6 @@ final class SelectedUnitPanel {
         refreshSettings();
     }
 
-    /** Keep the hot hooks absent while the switch is off. */
     synchronized void refreshSettings() throws Throwable {
         int columns = configuredColumns();
         requestedColumns = columns;
@@ -98,7 +85,6 @@ final class SelectedUnitPanel {
                 panelWidthField.setFloat(panelBounds, originalWidth);
             }
         });
-        host.log(4, TAG, "Selected-unit panel renderer hook installed");
     }
 
     private void hookActionColumnMethods() throws Throwable {
@@ -119,7 +105,6 @@ final class SelectedUnitPanel {
         wrappedActionColumnsHook = host.hookExecutable(wrappedColumns, chain -> {
             return requestedColumns;
         });
-        host.log(4, TAG, "Selected-unit action columns hook installed: " + requestedColumns);
     }
 
     private void unhookAll() {

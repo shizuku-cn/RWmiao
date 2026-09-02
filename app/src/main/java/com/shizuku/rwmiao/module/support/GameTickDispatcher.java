@@ -10,14 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import io.github.libxposed.api.XposedInterface;
 
-/**
- * Shares the native command-queue tick hooks between runtime features.
- *
- * <p>The game has separate single-player and multiplayer queue entry points,
- * but installing one Xposed wrapper per feature makes their fixed overhead
- * additive. This dispatcher keeps at most one wrapper per target Method while
- * allowing features to register and unregister their own work independently.</p>
- */
 public final class GameTickDispatcher {
     public interface Callback {
         void onTick(Object queue) throws Throwable;

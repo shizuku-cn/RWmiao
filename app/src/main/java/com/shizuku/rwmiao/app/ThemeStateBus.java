@@ -2,7 +2,6 @@ package com.shizuku.rwmiao.app;
 
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/** Process-local invalidation bus for the standalone module activity. */
 public final class ThemeStateBus {
     public interface Listener {
         void onThemeChanged(int themeMode, boolean dynamicColor);

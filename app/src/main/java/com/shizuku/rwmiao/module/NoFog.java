@@ -7,7 +7,6 @@ import io.github.libxposed.api.XposedInterface;
 
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_NO_FOG;
 
-/** Local fog-grid setup hook. */
 final class NoFog {
     private final RWmiaoModule host;
     private final ClassLoader loader;

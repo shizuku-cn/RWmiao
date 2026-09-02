@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.dex binary
+*.aar binary
+*.jar binary
+*.dll binary
+*.keystore binary

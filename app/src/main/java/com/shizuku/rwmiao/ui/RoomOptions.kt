@@ -66,7 +66,6 @@ import com.shizuku.rwmiao.module.RoomOptions as RoomOptionsFeature
 
 private class ApplyRoomOptionsException(cause: Throwable) : RuntimeException(cause)
 
-/** M3 replacement for the game-options dialog. / 游戏选项面板。 */
 class RoomOptions private constructor(
     private val activity: Activity,
     private val feature: RoomOptionsFeature,
@@ -187,8 +186,6 @@ private fun RoomOptionsContent(
     }
     var errorText by remember { mutableStateOf<String?>(null) }
 
-    // 选项文案由 Java 从目标游戏资源/翻译接口读取，不在 M3 层重复翻译。
-    // Labels come from the target game's resources/translation API, not duplicated here.
     val creditOptions = initial.creditsOptions.orEmpty()
     val startingUnitOptions = initial.startingUnitOptions.orEmpty()
     val fogOptions = initial.fogOptions.orEmpty()
@@ -516,8 +513,6 @@ private fun PresetRow(
     options: List<Pair<String, String>>,
     onSelected: (String) -> Unit
 ) {
-    // Keep all presets on one bounded row; do not nest a horizontal scroller.
-    // 预设按钮组保持在有界的单行中，不再嵌套横向滚动容器。
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(3.dp)

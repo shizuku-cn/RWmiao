@@ -1,6 +1,6 @@
 param(
-    [string]$JavaHome = 'D:\jdk-21\jdk-21.0.12+8',
-    [string]$WorkspaceRoot = (Resolve-Path "$PSScriptRoot\..\..\..").Path
+    [string]$JavaHome = $env:JAVA_HOME,
+    [string]$AndroidSdk = $env:ANDROID_SDK_ROOT
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,15 +9,48 @@ $BuildRoot = Join-Path $PSScriptRoot '.build'
 $StubClasses = Join-Path $BuildRoot 'stub-classes'
 $PayloadClasses = Join-Path $BuildRoot 'payload-classes'
 $DexOutput = Join-Path $BuildRoot 'dex'
-$AndroidJar = (Get-ChildItem (Join-Path $WorkspaceRoot 'local-sdk\platforms') -Recurse -Filter android.jar | Select-Object -First 1).FullName
-$D8 = Join-Path $WorkspaceRoot 'local-sdk\build-tools\36.0.0\d8.bat'
-$DexDump = Join-Path $WorkspaceRoot 'local-sdk\build-tools\36.0.0\dexdump.exe'
-$GameApk = Join-Path $WorkspaceRoot 'work\apk_baseline_20260813\inputs\original.apk'
 $AssetOutput = Join-Path $ProjectRoot 'app\src\main\assets\rwmiao_actions.dex'
 
-New-Item -ItemType Directory -Force -Path $StubClasses, $PayloadClasses, $DexOutput | Out-Null
+if ([string]::IsNullOrWhiteSpace($JavaHome)) {
+    throw 'JAVA_HOME is required.'
+}
+if ([string]::IsNullOrWhiteSpace($AndroidSdk)) {
+    $AndroidSdk = $env:ANDROID_HOME
+}
+if ([string]::IsNullOrWhiteSpace($AndroidSdk)) {
+    $LocalProperties = Join-Path $ProjectRoot 'local.properties'
+    if (Test-Path -LiteralPath $LocalProperties) {
+        $SdkLine = Get-Content -LiteralPath $LocalProperties |
+            Where-Object { $_ -match '^sdk\.dir=' } |
+            Select-Object -First 1
+        if ($SdkLine) {
+            $AndroidSdk = ($SdkLine -replace '^sdk\.dir=', '') -replace '\\\\', '\'
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($AndroidSdk)) {
+    throw 'ANDROID_SDK_ROOT, ANDROID_HOME, or sdk.dir in local.properties is required.'
+}
+
+$JavaHome = (Resolve-Path $JavaHome).Path
+$AndroidSdk = (Resolve-Path $AndroidSdk).Path
+$AndroidJar = Join-Path $AndroidSdk 'platforms\android-35\android.jar'
+if (-not (Test-Path -LiteralPath $AndroidJar)) {
+    throw "Android 35 platform is missing: $AndroidJar"
+}
+$BuildTools = Get-ChildItem (Join-Path $AndroidSdk 'build-tools') -Directory |
+    Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'd8.bat') } |
+    Select-Object -First 1
+if ($null -eq $BuildTools) {
+    throw 'Android build-tools with d8.bat are required.'
+}
+
 $env:JAVA_HOME = $JavaHome
 $Javac = Join-Path $JavaHome 'bin\javac.exe'
+$D8 = Join-Path $BuildTools.FullName 'd8.bat'
+$DexDump = Join-Path $BuildTools.FullName 'dexdump.exe'
+New-Item -ItemType Directory -Force -Path $StubClasses, $PayloadClasses, $DexOutput | Out-Null
 
 & $Javac -encoding UTF-8 -source 8 -target 8 -cp $AndroidJar -d $StubClasses `
     (Get-ChildItem (Join-Path $PSScriptRoot 'stubs') -Recurse -Filter *.java | ForEach-Object FullName)
@@ -27,16 +60,14 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     (Get-ChildItem (Join-Path $PSScriptRoot 'src') -Recurse -Filter *.java | ForEach-Object FullName)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& $D8 --release --min-api 26 --lib $AndroidJar --classpath $GameApk --output $DexOutput `
+& $D8 --release --min-api 26 --lib $AndroidJar --classpath $StubClasses --output $DexOutput `
     (Get-ChildItem $PayloadClasses -Recurse -Filter *.class | ForEach-Object FullName)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Copy-Item -LiteralPath (Join-Path $DexOutput 'classes.dex') -Destination $AssetOutput -Force
 
-# Runtime package access includes the defining class loader. The payload is
-# loaded by InMemoryDexClassLoader, so it must never directly access the
-# package-private gameFramework.f.i.m/n fields. The module resolves those
-# anchors reflectively and passes only the insertion index into this payload.
+# Validate loader boundaries without requiring a proprietary game APK.
+# 无需专有游戏 APK 即可校验类加载边界。
 $DumpText = (& $DexDump -d $AssetOutput | Out-String)
 $RequiredDexSymbols = @(
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoBridge;'",
@@ -48,7 +79,12 @@ $RequiredDexSymbols = @(
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoScriptsAction;'",
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoMotherRallyAction;'",
     "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoFreeSelectionAction;'",
-    'RWMiaoBridge.maybeAdd:(Ljava/util/ArrayList;IZZZZZZZZ)Ljava/util/ArrayList;'
+    "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoFreeBuildAction;'",
+    "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoSelectAllAction;'",
+    "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoCombatViewAction;'",
+    "Class descriptor  : 'Lcom/shizuku/rwmiao/payload/RWMiaoMutePanelAction;'",
+    'RWMiaoBridge.maybeAdd:(Ljava/util/ArrayList;IZZZZZZZZZZZ)Ljava/util/ArrayList;',
+    'RWMiaoBridge.maybeAddCombatView:(Ljava/util/ArrayList;IZ)Ljava/util/ArrayList;'
 )
 foreach ($Symbol in $RequiredDexSymbols) {
     if (-not $DumpText.Contains($Symbol)) {

@@ -24,7 +24,6 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.shizuku.rwmiao.config.SettingsContract.*
 import com.shizuku.rwmiao.module.lobby.LobbyRoom
 
-/** Compose host replacing the native lobby TableLayout at the same position. */
 class LobbyPanelHost(
     context: Context,
     private val callbacks: Callbacks
@@ -56,8 +55,6 @@ class LobbyPanelHost(
         val scrollX = scrollView?.scrollX ?: 0
         val scrollY = scrollView?.scrollY ?: 0
         rooms = nextRooms.toList()
-        // Recomposition changes the child height. Restore the native lobby
-        // ScrollView position after layout so refresh never jumps to the top.
         if (scrollView != null) {
             scrollView.post {
                 scrollView.scrollTo(scrollX, scrollY)
@@ -113,12 +110,6 @@ class LobbyPanelHost(
         restoreWindowOwners()
     }
 
-    /**
-     * Compose creates a window recomposer from the first child below
-     * android.R.id.content, not from an arbitrary nested view. The native
-     * lobby has no LifecycleOwner on that root, so expose the temporary owner
-     * there while this embedded panel is attached.
-     */
     private fun installWindowOwners() {
         val root = findWindowContentChild() ?: return
         if (windowContentChild != null && windowContentChild !== root) {

@@ -6,7 +6,6 @@ import com.corrodinggames.rts.game.units.a.u;
 import com.corrodinggames.rts.game.units.ce;
 import com.corrodinggames.rts.game.units.el;
 
-/** Local action; the module coordinates native commands for the selection. */
 public final class RWMiaoSegmentAction extends s {
     public static RWMiaoSegmentAction INST = new RWMiaoSegmentAction();
     public RWMiaoSegmentAction() { super("c__cut_rwmiao_segment"); }

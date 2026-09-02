@@ -104,30 +104,6 @@ internal fun DrawPage(
         item {
             SectionCard {
                 SwitchSetting(
-                    "显示核弹和反核数量",
-                    "在核弹发射井与反核装置上方显示弹药数量",
-                    state.showAmmoCount
-                ) { onState(state.copy(showAmmoCount = it)) }
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ColorEditor("自己", state.ammoColors[0], Modifier.weight(1f)) { color ->
-                        onState(state.copy(ammoColors = state.ammoColors.replace(0, color)))
-                    }
-                    ColorEditor("敌人", state.ammoColors[1], Modifier.weight(1f)) { color ->
-                        onState(state.copy(ammoColors = state.ammoColors.replace(1, color)))
-                    }
-                    ColorEditor("队友", state.ammoColors[2], Modifier.weight(1f)) { color ->
-                        onState(state.copy(ammoColors = state.ammoColors.replace(2, color)))
-                    }
-                }
-            }
-        }
-        item {
-            SectionCard {
-                SwitchSetting(
                     "显示工厂生产单位倒计时",
                     "在工厂位置显示生产倒计时与总时长",
                     state.showFactoryCountdown
@@ -156,10 +132,10 @@ internal fun DrawPage(
         item {
             SectionCard(compact = true) {
                 SwitchSetting(
-                    "经济面板",
-                    "常驻显示游戏回放中的经济面板",
-                    state.economicPanel
-                ) { onState(state.copy(economicPanel = it)) }
+                    "玩家信息面板",
+                    "对局内添加一个悬浮窗，显示所有玩家的信息",
+                    state.playerInfoPanel
+                ) { onState(state.copy(playerInfoPanel = it)) }
             }
         }
     }

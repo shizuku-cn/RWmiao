@@ -4,7 +4,6 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import io.github.libxposed.api.XposedInterface;
 
-/** Factory distribution optimization, kept separate from UI hooks. */
 final class FactoryOptimization {
     private static final String TAG = "RWmiao";
     private final RWmiaoModule host;

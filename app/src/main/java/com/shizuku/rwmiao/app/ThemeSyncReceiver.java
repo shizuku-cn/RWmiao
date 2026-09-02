@@ -6,7 +6,6 @@ import android.content.Intent;
 
 import com.shizuku.rwmiao.config.SettingsContract;
 
-/** Receives theme changes from the injected target-process settings page. */
 public final class ThemeSyncReceiver extends BroadcastReceiver {
     static final String ACTION_SYNC_THEME =
             "com.shizuku.rwmiao.action.SYNC_THEME";
@@ -19,8 +18,13 @@ public final class ThemeSyncReceiver extends BroadcastReceiver {
         int mode = intent.getIntExtra(
                 IconThemeProvider.ARG_THEME_MODE,
                 SettingsContract.UI_THEME_SYSTEM);
+        int colorMode = intent.getIntExtra(
+                IconThemeProvider.ARG_COLOR_MODE,
+                intent.getBooleanExtra(IconThemeProvider.ARG_DYNAMIC_COLOR, true)
+                        ? SettingsContract.UI_COLOR_DYNAMIC
+                        : SettingsContract.UI_COLOR_DEFAULT);
         boolean dynamicColor = intent.getBooleanExtra(
                 IconThemeProvider.ARG_DYNAMIC_COLOR, true);
-        IconThemeProvider.applyTheme(context, mode, dynamicColor);
+        IconThemeProvider.applyTheme(context, mode, colorMode, dynamicColor);
     }
 }

@@ -2,7 +2,6 @@ package com.shizuku.rwmiao.ui.main
 
 import com.shizuku.rwmiao.ui.support.*
 
-import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.expandVertically
@@ -42,10 +41,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -59,7 +54,7 @@ import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_DARK
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_LIGHT
 
 @Composable
-internal fun ModuleInfoApp(themeMode: Int, dynamicColor: Boolean) {
+internal fun ModuleInfoApp(themeMode: Int, colorMode: Int, moduleActive: Boolean) {
     val context = LocalContext.current
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (themeMode) {
@@ -67,20 +62,16 @@ internal fun ModuleInfoApp(themeMode: Int, dynamicColor: Boolean) {
         UI_THEME_DARK -> true
         else -> systemDark
     }
-    val colors = if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    } else {
-        if (darkTheme) darkColorScheme() else lightColorScheme()
-    }
+    val colors = moduleColorScheme(colorMode, darkTheme, context)
 
     MaterialTheme(colorScheme = colors) {
-        HomeScreen()
+        HomeScreen(moduleActive)
     }
 }
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun HomeScreen() {
+private fun HomeScreen(moduleActive: Boolean) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -103,7 +94,7 @@ private fun HomeScreen() {
                     visible = true,
                     enter = fadeIn(tween(420)) + expandVertically(tween(420))
                 ) {
-                    HomeStatusCard()
+                    HomeStatusCard(moduleActive)
                 }
             }
             item { ModuleDetailsCard() }
@@ -113,7 +104,7 @@ private fun HomeScreen() {
 }
 
 @Composable
-private fun HomeStatusCard() {
+private fun HomeStatusCard(moduleActive: Boolean) {
     val motion = rememberInfiniteTransition(label = "module status motion")
     val logoOffset by motion.animateFloat(
         initialValue = -4f,
@@ -165,7 +156,7 @@ private fun HomeStatusCard() {
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Text(
-                    "运行正常",
+                    if (moduleActive) "运行正常" else "未激活",
                     style = MaterialTheme.typography.headlineLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -180,7 +171,11 @@ private fun HomeStatusCard() {
                                 scaleY = statusPulse
                             }
                             .background(
-                                color = MaterialTheme.colorScheme.primary,
+                                color = if (moduleActive) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
                                 shape = CircleShape
                             )
                     )
@@ -294,13 +289,19 @@ private fun ProjectLinksCard() {
                     onClick = { openModuleLink(context, MODULE_QQ_GROUP_URL) },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("加入QQ群")
+                    Text("QQ群")
                 }
                 FilledTonalButton(
                     onClick = { openModuleLink(context, MODULE_GITHUB_URL) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1.4f)
                 ) {
                     Text("Github仓库")
+                }
+                FilledTonalButton(
+                    onClick = { openModuleLink(context, MODULE_BILIBILI_URL) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("BiliBili")
                 }
             }
         }
@@ -371,7 +372,7 @@ private fun AboutScreen(onBack: () -> Unit) {
                     Column {
                         ListItem(
                             headlineContent = { Text("加入QQ群") },
-                            supportingContent = { Text("加入社区，获取使用帮助与更新消息") },
+                            supportingContent = { Text("加入QQ群聊，获取使用帮助与更新消息") },
                             leadingContent = {
                                 Text(
                                     "Q",
@@ -393,6 +394,22 @@ private fun AboutScreen(onBack: () -> Unit) {
                             },
                             modifier = Modifier.clickable {
                                 openModuleLink(context, MODULE_GITHUB_URL)
+                            }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        ListItem(
+                            headlineContent = { Text("哔哩哔哩") },
+                            supportingContent = { Text(MODULE_BILIBILI_URL) },
+                            leadingContent = {
+                                Text(
+                                    "B",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                openModuleLink(context, MODULE_BILIBILI_URL)
                             }
                         )
                     }

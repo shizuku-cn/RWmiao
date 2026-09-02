@@ -2,6 +2,7 @@ package com.shizuku.rwmiao.module;
 
 import android.graphics.Point;
 import android.graphics.PointF;
+import android.graphics.RectF;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
@@ -11,53 +12,79 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import io.github.libxposed.api.XposedInterface;
 
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_SEGMENT_COMMAND;
 
-/**
- * Native waypoint command coordinator.
- *
- * Instead of rebuilding a unit's route after every tap, this class changes the
- * queue flag on the command produced by the game's own input code. Therefore
- * movement, route rendering and multiplayer serialization all use the original
- * command lifecycle.
- *
- * 原生路径点指令协调器。模块不重复构造整条路线，而是在游戏创建指令时修改其
- * 入队标志，使移动、折线绘制及多人同步均沿用游戏自身的指令生命周期。
- */
-final class SegmentCommands {
+public final class SegmentCommands {
     private static final String TAG = "RWmiao";
+    private static final String[] ORDER_TYPE_FIELDS = {"a", "f521a"};
 
     private final RWmiaoModule host;
     private final ClassLoader loader;
     private final Map<Long, SegmentState> states = new java.util.HashMap<>();
-    private final Set<Long> transportContinuationIds = new HashSet<>();
-    private final Map<Long, TransportSnapshot> transportSnapshots = new HashMap<>();
     private final Map<Long, ArrayDeque<Object>> overflowOrders = new HashMap<>();
     private Class<?> orderClass;
-    private Class<?> transportClass;
     private final Set<Object> manualTerminalCommands = Collections.newSetFromMap(
             new WeakHashMap<>());
     private final Set<Object> overflowDispatchCommands = Collections.newSetFromMap(
             new WeakHashMap<>());
     private final ThreadLocal<Boolean> splittingMove = new ThreadLocal<>();
-    private final ThreadLocal<Boolean> replayingTransport = new ThreadLocal<>();
     private final ThreadLocal<Boolean> moduleOwnedOrder = new ThreadLocal<>();
     private final ThreadLocal<Object> processingCommand = new ThreadLocal<>();
     private Method createNativeCommand;
     private Method setNativeMove;
     private Method addNativeUnit;
     private volatile Boolean enabledState;
+    private volatile boolean freeBuildMode;
     private Class<?> inputClass;
     private Class<?> commandClass;
     private Class<?> unitClass;
+    private Class<?> targetUnitClass;
+    private Class<?> buildTypeClass;
+    private Class<?> teamClass;
+    private Class<?> nativeBlueprintClass;
+    private Constructor<?> nativeBlueprintConstructor;
+    private Method sharedBlueprintUnitMethod;
+    private Method previewBlueprintUnitMethod;
+    private Method blueprintOverlapMethod;
+    private Method mapWorldToTileMethod;
+    private Method buildTypeSpecialSnapMethod;
+    private Method specialBuildPointMethod;
+    private Method blueprintOffsetXMethod;
+    private Method blueprintOffsetYMethod;
+    private Method footprintRectMethod;
+    private Field engineMapField;
+    private Field mapWorldXField;
+    private Field mapWorldYField;
+    private Field mapTileWidthField;
+    private Field mapTileHeightField;
+    private Field unitXField;
+    private Field unitYField;
+    private Field unitQueueCountField;
+    private Field placementGroupField;
+    private Field blueprintTypeField;
+    private Field blueprintTeamField;
+    private Field blueprintVariantField;
+    private Field blueprintXField;
+    private Field blueprintYField;
+    private Field blueprintOwnerTeamField;
+    private Field blueprintPendingField;
+    private Field blueprintBuilderField;
+    private Field blueprintQueueLimitField;
+    private Field blueprintGroupField;
+    private Field blueprintAnimationField;
+    private boolean nativeBlueprintRuntimeReady;
+    private final RectF freeBuildFootprintRect = new RectF();
     private final ArrayList<XposedInterface.HookHandle> hooks = new ArrayList<>();
+    private final Map<ExactMethodKey, Method> exactMethods = new ConcurrentHashMap<>();
+    private final Set<ExactMethodKey> missingExactMethods = ConcurrentHashMap.newKeySet();
 
     SegmentCommands(RWmiaoModule host, ClassLoader loader) {
         this.host = host;
@@ -68,19 +95,39 @@ final class SegmentCommands {
         inputClass = loader.loadClass(host.target("gameFramework.f.i"));
         commandClass = loader.loadClass(host.target("gameFramework.e"));
         unitClass = loader.loadClass(host.target("game.units.bp"));
+        targetUnitClass = loader.loadClass(host.target("game.units.ce"));
+        buildTypeClass = loader.loadClass(host.target("game.units.el"));
+        teamClass = loader.loadClass(host.target("game.p"));
         orderClass = loader.loadClass(host.target("game.units.en"));
-        try {
-            transportClass = loader.loadClass(host.target("game.units.b.f"));
-        } catch (Throwable t) {
-            host.log(4, TAG, "Native transport class not found; transport continuation disabled", t);
-        }
         createNativeCommand = exactMethod(inputClass, "g");
         setNativeMove = exactMethod(commandClass, "a", float.class, float.class);
         addNativeUnit = exactMethod(commandClass, "a", unitClass);
         if (createNativeCommand == null || setNativeMove == null || addNativeUnit == null) {
             throw new NoSuchMethodException("native waypoint command methods");
         }
+        try {
+            resolveNativeBuildBlueprintRuntime();
+        } catch (Throwable t) {
+            nativeBlueprintRuntimeReady = false;
+            host.log(5, TAG, "原生待建造蓝图运行时解析失败", t);
+        }
+        host.addGameResyncListener(this::onGameResync);
         refreshSettings();
+    }
+
+    private void onGameResync() {
+        synchronized (overflowOrders) {
+            overflowOrders.clear();
+        }
+        synchronized (manualTerminalCommands) {
+            manualTerminalCommands.clear();
+        }
+        synchronized (overflowDispatchCommands) {
+            overflowDispatchCommands.clear();
+        }
+        splittingMove.remove();
+        moduleOwnedOrder.remove();
+        processingCommand.remove();
     }
 
     private synchronized void ensureHooks() throws Throwable {
@@ -90,8 +137,6 @@ final class SegmentCommands {
         hookTerminalOrders(commandClass);
         hookCommandExecution(commandClass);
         hookUnitQueue(unitClass);
-        hookTransportDetach(unitClass);
-        hookTransportUnload();
     }
 
     private synchronized void disableHooks() {
@@ -101,7 +146,6 @@ final class SegmentCommands {
         hooks.clear();
     }
 
-    /** Mark the first native move as accepted only after the game handled it. */
     private void hookGroundMove(Class<?> inputClass) throws Throwable {
         Method ground = exactMethod(inputClass, "a", float.class, float.class, Point.class);
         if (ground == null) throw new NoSuchMethodException("ground click a(float,float,Point)");
@@ -114,17 +158,8 @@ final class SegmentCommands {
             }
             return result;
         }));
-        host.log(4, TAG, "Waypoint ground-click hook installed: " + ground);
     }
 
-    /**
-     * A shared move command creates one formation group, which makes faster
-     * units wait for the slowest unit at every waypoint. During segmented mode
-     * each selected unit receives its own otherwise identical native command.
-     *
-     * 共享移动指令会创建一个编队组，导致快单位在每个路径点等待最慢单位。
-     * 分段模式下将其拆成逐单位原生指令，使各单位独立推进自己的路径队列。
-     */
     private void hookCommandTargets(Class<?> commandClass, Class<?> unitClass)
             throws Throwable {
         hooks.add(host.hookExecutable(addNativeUnit, chain -> {
@@ -141,8 +176,16 @@ final class SegmentCommands {
             }
             Object result = chain.proceed();
             try {
-                trackTransportContinuation(command, unit);
                 String orderName = orderTypeName(host.findFieldValue(command, "j"));
+                if (enabled() && isRepeatableOrder(orderName)
+                        && (isActive(unitId(unit))
+                        || "reclaim".equals(orderName) && isReclaimBuilding(unit))) {
+                    setBoolean(command, "e", true);
+                    setBoolean(command, "h", true);
+                }
+                if ("attack".equals(orderName) && isActive(unitId(unit))) {
+                    markManualTerminal(command);
+                }
                 if (isTerminal(command)) {
                     if (isActive(unitId(unit))) markManualTerminal(command);
                     finishUnit(unit);
@@ -156,12 +199,6 @@ final class SegmentCommands {
         }));
     }
 
-    /**
-     * The native unit queue has a hard limit of 29 entries.  When it is full,
-     * bp.an() returns a scratch slot without increasing O, so the new order is
-     * silently discarded.  Keep those recognized appended orders in a small
-     * per-unit spill queue and send them back as the native queue advances.
-     */
     private void hookCommandExecution(Class<?> commandClass) {
         Method execute = exactMethod(commandClass, "h");
         if (execute == null) {
@@ -197,6 +234,8 @@ final class SegmentCommands {
                             && !isOverflowDispatch(command)
                             && booleanField(command, "e")
                             && isSegmentOrder(orderTypeName(order))
+                            && !(freeBuildMode
+                            && "build".equals(orderTypeName(order)))
                             && isNativeQueueFull(unit)) {
                         Object copy = copyOrder(order);
                         if (copy != null) {
@@ -222,56 +261,11 @@ final class SegmentCommands {
             Object unit = chain.getThisObject();
             Object result = chain.proceed();
             try {
-                if (!Boolean.TRUE.equals(replayingTransport.get())) {
-                    drainOverflow(unit);
-                }
+                drainOverflow(unit);
             } catch (Throwable t) {
                 host.log(5, TAG, "Waypoint overflow drain skipped", t);
             }
             return result;
-        }));
-    }
-
-    /**
-     * The native unload path clears a transported unit in bp.at() after it has
-     * already detached the unit from the transport.  Capture at that exact
-     * boundary instead of relying only on scanning the transport cargo list;
-     * custom transport implementations can mutate that list before the tick
-     * hook observes it.
-     *
-     * 原生卸载路径会在载荷已经脱离载具后调用 bp.at() 清空队列。这里在这个
-     * 确切边界抓取剩余指令，避免改版载具提前修改货舱列表导致扫描漏掉单位。
-     */
-    private void hookTransportDetach(Class<?> unitClass) {
-        Method clear = exactMethod(unitClass, "at");
-        if (clear == null) {
-            host.log(4, TAG, "Native unit clear method not found; direct transport capture disabled");
-            return;
-        }
-        hooks.add(host.hookExecutable(clear, chain -> {
-            Object unit = chain.getThisObject();
-            try {
-                Long id = unitId(unit);
-                Object recentTransport = host.findFieldValue(unit, "bT");
-                Object currentTransport = host.findFieldValue(unit, "cP");
-                if (id != null
-                        && isTransportTracked(id)
-                        && currentTransport == null
-                        && recentTransport != null
-                        && transportClass != null
-                        && transportClass.isInstance(recentTransport)) {
-                    ArrayList<Object> orders = copyPendingOrders(unit);
-                    if (!orders.isEmpty()) {
-                        synchronized (transportContinuationIds) {
-                            transportSnapshots.put(id,
-                                    new TransportSnapshot(recentTransport, unit, orders));
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                host.log(5, TAG, "Direct transport continuation capture skipped", t);
-            }
-            return chain.proceed();
         }));
     }
 
@@ -343,7 +337,6 @@ final class SegmentCommands {
         try {
             Object engine = host.findEngine(loader);
             Object queue = host.findField(engine.getClass(), "cc").get(engine);
-            Class<?> teamClass = loader.loadClass(host.target("game.p"));
             Object team = host.findFieldValue(unit, "bZ");
             Method create = exactMethod(queue.getClass(), "a", teamClass);
             if (create != null && team != null) return create.invoke(queue, team);
@@ -377,7 +370,6 @@ final class SegmentCommands {
         }
     }
 
-    /** Duplicate one move target while preserving the native append flag. */
     private void issueIndependentMove(Object source, Object unit) throws Throwable {
         Object order = host.findFieldValue(source, "j");
         if (order == null) throw new IllegalStateException("move order missing");
@@ -409,11 +401,6 @@ final class SegmentCommands {
         return command;
     }
 
-    /**
-     * Hook native order setters rather than UI action methods. This covers both
-     * ground and unit targets and remains valid when a repackaged game changes
-     * its input UI.
-     */
     private void hookTerminalOrders(Class<?> commandClass) {
         for (Method method : commandClass.getDeclaredMethods()) {
             if (!isOrderSetterCandidate(method)) continue;
@@ -422,9 +409,7 @@ final class SegmentCommands {
                 Object result = chain.proceed();
                 try {
                     Object command = chain.getThisObject();
-                    if (!Boolean.TRUE.equals(replayingTransport.get())) {
-                        configureSegmentOrder(command);
-                    }
+                    configureSegmentOrder(command);
                     if (isTerminal(command)) {
                         if (hasActiveAttachedUnit(command)) markManualTerminal(command);
                         finishAttachedUnits(command);
@@ -435,38 +420,6 @@ final class SegmentCommands {
                 return result;
             }));
         }
-    }
-
-    /**
-     * Native transport unloading clears the cargo unit's waypoint array in
-     * bp.at(). Capture the remaining native orders before that call and replay
-     * them after the transport has detached the unit.
-     *
-     * 原生载具卸载会在 bp.at() 中清空被装载单位的路径队列。这里仅跟踪曾经
-     * 进入分段序列的载荷，在原生卸载完成后恢复剩余原生指令。
-     */
-    private void hookTransportUnload() {
-        if (transportClass == null) return;
-        Method tick = exactMethod(transportClass, "a", float.class);
-        if (tick == null) {
-            host.log(4, TAG, "Native transport tick method not found");
-            return;
-        }
-        hooks.add(host.hookExecutable(tick, chain -> {
-            Map<Long, Object> beforeUnits = Collections.emptyMap();
-            try {
-                beforeUnits = snapshotTransportUnits(chain.getThisObject());
-            } catch (Throwable t) {
-                host.log(5, TAG, "Transport snapshot skipped", t);
-            }
-            Object result = chain.proceed();
-            try {
-                restoreDetachedTransportUnits(chain.getThisObject(), beforeUnits);
-            } catch (Throwable t) {
-                host.log(5, TAG, "Transport continuation restore skipped", t);
-            }
-            return result;
-        }));
     }
 
     private boolean isOrderSetterCandidate(Method method) {
@@ -508,6 +461,10 @@ final class SegmentCommands {
         return enabled();
     }
 
+    public void setFreeBuildMode(boolean active) {
+        freeBuildMode = active;
+    }
+
     boolean hasActiveSelection() {
         try {
             Object engine = host.findEngine(loader);
@@ -525,7 +482,6 @@ final class SegmentCommands {
         }
     }
 
-    /** Send a computed route through the native command queue. */
     void issueComputedPath(Object unit, List<PointF> points) throws Throwable {
         if (unit == null || points == null || points.isEmpty()) return;
         for (int index = 0; index < points.size(); index++) {
@@ -549,23 +505,21 @@ final class SegmentCommands {
     }
 
     Object issueAttack(Object unit, Object target, boolean append) throws Throwable {
-        Class<?> targetClass = loader.loadClass(host.target("game.units.ce"));
         Object command = createTerminalCommand(append);
-        Method setter = exactMethod(command.getClass(), "a", targetClass);
+        Method setter = exactMethod(command.getClass(), "a", targetUnitClass);
         if (setter == null) throw new NoSuchMethodException("native attack command");
         invokeModuleOwned(setter, command, target);
         addOneUnit(command, unit);
         return command;
     }
 
-    Object issueBuild(Object unit, float x, float y, Object buildType, int variant)
+    public Object issueBuild(Object unit, float x, float y, Object buildType, int variant)
             throws Throwable {
         return issueBuild(unit, x, y, buildType, variant, true);
     }
 
-    Object issueBuild(Object unit, float x, float y, Object buildType, int variant,
-                      boolean append) throws Throwable {
-        Class<?> buildTypeClass = loader.loadClass(host.target("game.units.el"));
+    public Object issueBuild(Object unit, float x, float y, Object buildType, int variant,
+                             boolean append) throws Throwable {
         Object command = createTerminalCommand(append);
         Method setter = exactMethod(command.getClass(), "a",
                 float.class, float.class, buildTypeClass, int.class);
@@ -573,6 +527,210 @@ final class SegmentCommands {
         invokeModuleOwned(setter, command, x, y, buildType, variant);
         addOneUnit(command, unit);
         return command;
+    }
+
+    public enum BuildToggleResult {
+        NONE(false),
+        ADDED(true),
+        DELETED(false),
+        REPLACED(true);
+
+        private final boolean addsBuild;
+
+        BuildToggleResult(boolean addsBuild) {
+            this.addsBuild = addsBuild;
+        }
+
+        public boolean addsBuild() {
+            return addsBuild;
+        }
+    }
+
+    public boolean toggleBuildAt(Object unit, float x, float y,
+                                 Object buildType, int variant)
+            throws Throwable {
+        return toggleBuildAtDetailed(unit, x, y, buildType, variant)
+                != BuildToggleResult.NONE;
+    }
+
+    public synchronized BuildToggleResult toggleBuildAtDetailed(
+            Object unit, float x, float y, Object buildType, int variant)
+            throws Throwable {
+        if (unit == null || buildType == null) return BuildToggleResult.NONE;
+        BuildOverlap overlap = findPendingBuildOverlap(unit, x, y, buildType);
+        if (overlap == null) {
+            issueBuild(unit, x, y, buildType, variant, true);
+            return BuildToggleResult.ADDED;
+        }
+
+        ArrayList<Object> orders = copyPendingOrders(unit);
+        int matched = findCopiedBuildOrder(orders, overlap);
+        if (matched < 0) {
+            throw new IllegalStateException("overlapping native build order disappeared");
+        }
+
+        boolean same = overlap.type == buildType
+                || overlap.type != null && overlap.type.equals(buildType);
+        same = same && overlap.variant == variant;
+        Object owner = host.findFieldValue(unit, "bZ");
+        sendStopCommand(Collections.singletonList(unit), owner);
+        clearOverflow(unitId(unit));
+
+        boolean append = false;
+        for (int i = 0; i < orders.size(); i++) {
+            if (i == matched) continue;
+            Object order = orders.get(i);
+            Object command = createCommandForUnit(unit);
+            if (command == null || !applyNativeOrder(command, order)) {
+                host.log(5, TAG, "自由建造队列重放遇到不支持的原生指令");
+                continue;
+            }
+            setBoolean(command, "e", append);
+            setBoolean(command, "h", true);
+            addOneUnit(command, unit);
+            append = true;
+        }
+        if (!same) {
+            issueBuild(unit, x, y, buildType, variant, append);
+            return BuildToggleResult.REPLACED;
+        }
+        return BuildToggleResult.DELETED;
+    }
+
+    private BuildOverlap findPendingBuildOverlap(
+            Object unit, float x, float y, Object buildType) throws Throwable {
+        Field queueField = host.findField(unit.getClass(), "Q");
+        Field countField = host.findField(unit.getClass(), "O");
+        Object queue = queueField.get(unit);
+        int count = queue == null ? 0 : Math.max(0, Math.min(
+                ((Number) countField.get(unit)).intValue(), Array.getLength(queue)));
+        for (int i = 0; i < count; i++) {
+            BuildOverlap overlap = overlapForOrder(Array.get(queue, i), x, y, buildType);
+            if (overlap != null) return overlap;
+        }
+        Long id = unitId(unit);
+        if (id != null) {
+            synchronized (overflowOrders) {
+                ArrayDeque<Object> overflow = overflowOrders.get(id);
+                if (overflow != null) {
+                    for (Object order : overflow) {
+                        BuildOverlap overlap = overlapForOrder(order, x, y, buildType);
+                        if (overlap != null) return overlap;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private BuildOverlap overlapForOrder(
+            Object order, float x, float y, Object buildType) throws Throwable {
+        if (order == null || !"build".equals(orderTypeName(order))) return null;
+        Object orderBuildType = host.findFieldValue(order, "b");
+        if (orderBuildType == null) return null;
+        float orderX = numberField(order, "e");
+        float orderY = numberField(order, "f");
+        if (!buildFootprintsOverlap(buildType, x, y, orderBuildType, orderX, orderY)) {
+            return null;
+        }
+        return new BuildOverlap(orderBuildType, intField(order, "d"), orderX, orderY);
+    }
+
+    private int findCopiedBuildOrder(ArrayList<Object> orders, BuildOverlap overlap)
+            throws Throwable {
+        for (int i = 0; i < orders.size(); i++) {
+            Object order = orders.get(i);
+            if (!"build".equals(orderTypeName(order))) continue;
+            Object type = host.findFieldValue(order, "b");
+            boolean sameType = type == overlap.type
+                    || type != null && type.equals(overlap.type);
+            if (sameType && intField(order, "d") == overlap.variant
+                    && Float.compare(numberField(order, "e"), overlap.x) == 0
+                    && Float.compare(numberField(order, "f"), overlap.y) == 0) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public synchronized Object registerNativeBuildBlueprint(
+            Object builder, float x, float y, Object buildType, int variant,
+            int sequence) throws Throwable {
+        requireNativeBlueprintRuntime();
+        Object engine = host.findEngine(loader);
+        Object player = host.findField(engine.getClass(), "bp").get(engine);
+        Object ui = host.findField(engine.getClass(), "bP").get(engine);
+        Object blueprint = nativeBlueprintConstructor.newInstance();
+        blueprintTypeField.set(blueprint, buildType);
+        blueprintTeamField.set(blueprint, player);
+        blueprintVariantField.setInt(blueprint, variant);
+        blueprintXField.setFloat(blueprint, x);
+        blueprintYField.setFloat(blueprint, y);
+        blueprintOwnerTeamField.set(blueprint, player);
+        blueprintPendingField.setBoolean(blueprint, true);
+        blueprintBuilderField.set(blueprint, builder);
+        blueprintQueueLimitField.setBoolean(blueprint, false);
+        blueprintGroupField.setInt(blueprint, placementGroupField.getInt(ui));
+        blueprintAnimationField.setFloat(blueprint,
+                1.0f + (0.15f * Math.min(28, Math.max(0, sequence))));
+        return blueprint;
+    }
+
+    public synchronized boolean snapNativeBuildPoint(
+            float worldX, float worldY, Object buildType, float[] result)
+            throws Throwable {
+        requireNativeBlueprintRuntime();
+        if (buildType == null || result == null || result.length < 2) return false;
+        Object engine = host.findEngine(loader);
+        Object map = engineMapField.get(engine);
+        Object preview = previewBlueprintUnitMethod.invoke(null, buildType);
+        if (map == null || !unitClass.isInstance(preview)) return false;
+
+        mapWorldToTileMethod.invoke(map, worldX, worldY);
+        float x = host.number(mapWorldXField.get(map));
+        float y = host.number(mapWorldYField.get(map));
+        if (Boolean.TRUE.equals(buildTypeSpecialSnapMethod.invoke(buildType))) {
+            Object point = specialBuildPointMethod.invoke(null, (int) x, (int) y);
+            if (point instanceof Point) {
+                x = ((Point) point).x;
+                y = ((Point) point).y;
+            }
+        }
+        x += host.number(blueprintOffsetXMethod.invoke(preview));
+        y += host.number(blueprintOffsetYMethod.invoke(preview));
+        result[0] = x;
+        result[1] = y;
+        return true;
+    }
+
+    public synchronized boolean freeBuildPlacementSpacing(
+            Object buildType, float[] result) throws Throwable {
+        requireNativeBlueprintRuntime();
+        if (buildType == null || result == null || result.length < 2) return false;
+        Object engine = host.findEngine(loader);
+        Object map = engineMapField.get(engine);
+        Object preview = previewBlueprintUnitMethod.invoke(null, buildType);
+        if (map == null || !unitClass.isInstance(preview)) return false;
+
+        float savedX = unitXField.getFloat(preview);
+        float savedY = unitYField.getFloat(preview);
+        try {
+            unitXField.setFloat(preview, 0.0f);
+            unitYField.setFloat(preview, 0.0f);
+            footprintRectMethod.invoke(preview, map, freeBuildFootprintRect);
+            float cellWidth = host.number(mapTileWidthField.get(map));
+            float cellHeight = host.number(mapTileHeightField.get(map));
+            if (!(cellWidth > 0.0f)) cellWidth = 10.0f;
+            if (!(cellHeight > 0.0f)) cellHeight = 10.0f;
+            float width = Math.abs(freeBuildFootprintRect.width());
+            float height = Math.abs(freeBuildFootprintRect.height());
+            result[0] = width > 0.0f ? width : cellWidth;
+            result[1] = height > 0.0f ? height : cellHeight;
+            return true;
+        } finally {
+            unitXField.setFloat(preview, savedX);
+            unitYField.setFloat(preview, savedY);
+        }
     }
 
     Object issueAttackMove(Object unit, float x, float y) throws Throwable {
@@ -594,6 +752,83 @@ final class SegmentCommands {
         setBoolean(command, "e", append);
         setBoolean(command, "h", true);
         return command;
+    }
+
+    private void resolveNativeBuildBlueprintRuntime() throws Throwable {
+        nativeBlueprintClass = loader.loadClass(host.target("gameFramework.d.a"));
+        nativeBlueprintConstructor = nativeBlueprintClass.getDeclaredConstructor();
+        nativeBlueprintConstructor.setAccessible(true);
+        sharedBlueprintUnitMethod = exactMethod(targetUnitClass, "b", buildTypeClass);
+        previewBlueprintUnitMethod = exactMethod(targetUnitClass, "d", buildTypeClass);
+        blueprintOverlapMethod = exactMethod(nativeBlueprintClass, "a", unitClass, unitClass);
+        Class<?> engineClass = loader.loadClass(host.target("gameFramework.k"));
+        engineMapField = host.findField(engineClass, "bI");
+        Class<?> mapClass = engineMapField.getType();
+        mapWorldToTileMethod = exactMethod(mapClass, "b", float.class, float.class);
+        mapWorldXField = host.findField(mapClass, "U");
+        mapWorldYField = host.findField(mapClass, "V");
+        mapTileWidthField = host.findField(mapClass, "n");
+        mapTileHeightField = host.findField(mapClass, "o");
+        buildTypeSpecialSnapMethod = exactMethod(buildTypeClass, "p");
+        Class<?> specialSnapClass = loader.loadClass(host.target("gameFramework.f.l"));
+        specialBuildPointMethod = exactMethod(specialSnapClass, "a", int.class, int.class);
+        blueprintOffsetXMethod = exactMethod(unitClass, "cB");
+        blueprintOffsetYMethod = exactMethod(unitClass, "cC");
+        footprintRectMethod = exactMethod(unitClass, "a", mapClass, RectF.class);
+        if (sharedBlueprintUnitMethod == null || previewBlueprintUnitMethod == null
+                || blueprintOverlapMethod == null || mapWorldToTileMethod == null
+                || buildTypeSpecialSnapMethod == null || specialBuildPointMethod == null
+                || blueprintOffsetXMethod == null || blueprintOffsetYMethod == null
+                || footprintRectMethod == null) {
+            throw new NoSuchMethodException("native build blueprint footprint methods");
+        }
+        unitXField = host.findField(unitClass, "eq");
+        unitYField = host.findField(unitClass, "er");
+        unitQueueCountField = host.findField(unitClass, "O");
+        placementGroupField = host.findField(inputClass, "ad");
+        blueprintTypeField = host.findField(nativeBlueprintClass, "d");
+        blueprintTeamField = host.findField(nativeBlueprintClass, "e");
+        blueprintVariantField = host.findField(nativeBlueprintClass, "f");
+        blueprintXField = host.findField(nativeBlueprintClass, "g");
+        blueprintYField = host.findField(nativeBlueprintClass, "h");
+        blueprintOwnerTeamField = host.findField(nativeBlueprintClass, "j");
+        blueprintPendingField = host.findField(nativeBlueprintClass, "n");
+        blueprintBuilderField = host.findField(nativeBlueprintClass, "o");
+        blueprintQueueLimitField = host.findField(nativeBlueprintClass, "q");
+        blueprintGroupField = host.findField(nativeBlueprintClass, "r");
+        blueprintAnimationField = host.findField(nativeBlueprintClass, "s");
+        nativeBlueprintRuntimeReady = true;
+    }
+
+    private void requireNativeBlueprintRuntime() {
+        if (!nativeBlueprintRuntimeReady) {
+            throw new IllegalStateException("native build blueprint runtime unavailable");
+        }
+    }
+
+    private boolean buildFootprintsOverlap(Object currentType, float currentX, float currentY,
+                                           Object pendingType, float pendingX, float pendingY)
+            throws Throwable {
+        requireNativeBlueprintRuntime();
+        Object current = sharedBlueprintUnitMethod.invoke(null, currentType);
+        Object pending = previewBlueprintUnitMethod.invoke(null, pendingType);
+        if (!unitClass.isInstance(current) || !unitClass.isInstance(pending)) return false;
+        float savedCurrentX = unitXField.getFloat(current);
+        float savedCurrentY = unitYField.getFloat(current);
+        float savedPendingX = unitXField.getFloat(pending);
+        float savedPendingY = unitYField.getFloat(pending);
+        try {
+            unitXField.setFloat(current, currentX);
+            unitYField.setFloat(current, currentY);
+            unitXField.setFloat(pending, pendingX);
+            unitYField.setFloat(pending, pendingY);
+            return Boolean.TRUE.equals(blueprintOverlapMethod.invoke(null, current, pending));
+        } finally {
+            unitXField.setFloat(current, savedCurrentX);
+            unitYField.setFloat(current, savedCurrentY);
+            unitXField.setFloat(pending, savedPendingX);
+            unitYField.setFloat(pending, savedPendingY);
+        }
     }
 
     private void addOneUnit(Object command, Object unit) throws Throwable {
@@ -663,7 +898,6 @@ final class SegmentCommands {
                     for (Object unit : selected) {
                         Long id = unitId(unit);
                         states.remove(id);
-                        clearTransportTracking(id);
                     }
                 }
             } else {
@@ -673,6 +907,42 @@ final class SegmentCommands {
             }
         } catch (Throwable t) {
             host.log(5, TAG, "Failed to toggle waypoint mode", t);
+        }
+    }
+
+    void setSelected(boolean enable) {
+        if (!enabled()) return;
+        try {
+            Object engine = host.findEngine(loader);
+            Object me = host.findField(engine.getClass(), "bp").get(engine);
+            ArrayList<Object> selected = new ArrayList<>();
+            for (Object unit : selectedUnits(engine)) {
+                if (isOrderableUnit(unit, me)) selected.add(unit);
+            }
+            if (selected.isEmpty()) return;
+            if (!enable) {
+                ArrayList<Object> active = new ArrayList<>();
+                synchronized (states) {
+                    for (Object unit : selected) {
+                        if (isActive(unitId(unit))) active.add(unit);
+                    }
+                }
+                if (active.isEmpty()) return;
+                sendStopCommand(active, me);
+                synchronized (states) {
+                    for (Object unit : active) states.remove(unitId(unit));
+                }
+            } else {
+                synchronized (states) {
+                    for (Object unit : selected) {
+                        if (!isActive(unitId(unit))) {
+                            states.put(unitId(unit), new SegmentState());
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            host.log(5, TAG, "Failed to set waypoint mode", t);
         }
     }
 
@@ -714,7 +984,7 @@ final class SegmentCommands {
     private boolean isTerminal(Object command) throws Throwable {
         Object order = host.findFieldValue(command, "j");
         String name = orderTypeName(order);
-        return "attack".equals(name) || "attackMove".equals(name)
+        return "attackMove".equals(name)
                 || "guard".equals(name);
     }
 
@@ -723,17 +993,9 @@ final class SegmentCommands {
         return "move".equals(orderTypeName(order));
     }
 
-    /**
-     * Apply the native append flag only to orders understood by this feature.
-     * Unknown special actions retain the game's normal replacement behavior.
-     *
-     * 仅对本功能明确识别的指令设置原生追加标志；未知特殊动作保持游戏默认
-     * 的替换行为，避免改变自定义单位技能或其它动作的语义。
-     */
     private void configureSegmentOrder(Object command) throws Throwable {
         if (!enabled()
-                || Boolean.TRUE.equals(moduleOwnedOrder.get())
-                || Boolean.TRUE.equals(replayingTransport.get())) return;
+                || Boolean.TRUE.equals(moduleOwnedOrder.get())) return;
         Object order = host.findFieldValue(command, "j");
         String name = orderTypeName(order);
         if (!isSegmentOrder(name) || !selectedRouteStarted()) return;
@@ -744,138 +1006,21 @@ final class SegmentCommands {
     private boolean isSegmentOrder(String name) {
         return "move".equals(name) || "attack".equals(name)
                 || "attackMove".equals(name) || "build".equals(name)
-                || "repair".equals(name) || "loadInto".equals(name)
-                || "loadUp".equals(name) || "reclaim".equals(name)
+                || "repair".equals(name) || "reclaim".equals(name)
+                || "loadInto".equals(name) || "loadUp".equals(name)
                 || "patrol".equals(name) || "guard".equals(name);
     }
 
-    private void trackTransportContinuation(Object command, Object unit) throws Throwable {
-        String name = orderTypeName(host.findFieldValue(command, "j"));
-        if (!("loadInto".equals(name) || "loadUp".equals(name))) return;
-        Long id = unitId(unit);
-        if (id == null || !isActive(id)) return;
-        synchronized (transportContinuationIds) {
-            transportContinuationIds.add(id);
-        }
+    private boolean isRepeatableOrder(String name) {
+        return "reclaim".equals(name)
+                || "loadInto".equals(name)
+                || "loadUp".equals(name);
     }
 
-    private Map<Long, Object> snapshotTransportUnits(Object transport) throws Throwable {
-        synchronized (transportContinuationIds) {
-            if (transportContinuationIds.isEmpty()) return Collections.emptyMap();
-        }
-        Object loaded = host.findFieldValue(transport, "o");
-        if (!(loaded instanceof Iterable)) return Collections.emptyMap();
-        Map<Long, Object> result = new HashMap<>();
-        for (Object unit : (Iterable<?>) loaded) {
-            Long id = unitId(unit);
-            if (id == null || !isTransportTracked(id)) continue;
-            ArrayList<Object> orders = copyPendingOrders(unit);
-            if (!orders.isEmpty()) {
-                synchronized (transportContinuationIds) {
-                    transportSnapshots.put(id,
-                            new TransportSnapshot(transport, unit, orders));
-                }
-            }
-            result.put(id, unit);
-        }
-        return result;
-    }
-
-    private void restoreDetachedTransportUnits(Object transport, Map<Long, Object> before)
-            throws Throwable {
-        Map<Long, Object> candidates = new HashMap<>();
-        if (before != null) candidates.putAll(before);
-        synchronized (transportContinuationIds) {
-            for (Map.Entry<Long, TransportSnapshot> entry : transportSnapshots.entrySet()) {
-                TransportSnapshot snapshot = entry.getValue();
-                if (snapshot != null && snapshot.transport == transport
-                        && snapshot.unit != null) {
-                    candidates.putIfAbsent(entry.getKey(), snapshot.unit);
-                }
-            }
-        }
-        if (candidates.isEmpty()) return;
-        Set<Long> remaining = new HashSet<>();
-        Object loaded = host.findFieldValue(transport, "o");
-        if (loaded instanceof Iterable) {
-            for (Object unit : (Iterable<?>) loaded) {
-                Long id = unitId(unit);
-                if (id != null) remaining.add(id);
-            }
-        }
-        for (Map.Entry<Long, Object> entry : candidates.entrySet()) {
-            Long id = entry.getKey();
-            if (remaining.contains(id) || isStillAttached(entry.getValue())) continue;
-            TransportSnapshot snapshot;
-            synchronized (transportContinuationIds) {
-                snapshot = transportSnapshots.remove(id);
-                transportContinuationIds.remove(id);
-            }
-            clearOverflow(id);
-            if (snapshot != null && !isDead(entry.getValue())) {
-                replayTransportOrders(entry.getValue(), snapshot.orders);
-            }
-        }
-    }
-
-    private boolean isTransportTracked(Long id) {
-        synchronized (transportContinuationIds) {
-            return transportContinuationIds.contains(id);
-        }
-    }
-
-    private boolean isStillAttached(Object unit) {
-        try {
-            return host.findFieldValue(unit, "cP") != null;
-        } catch (Throwable ignored) {
-            return true;
-        }
-    }
-
-    private boolean isDead(Object unit) {
-        try {
-            return host.boolField(unit, "bX");
-        } catch (Throwable ignored) {
-            return true;
-        }
-    }
-
-    private ArrayList<Object> copyPendingOrders(Object unit) throws Throwable {
-        ArrayList<Object> result = new ArrayList<>();
-        Field queueField = host.findField(unit.getClass(), "Q");
-        Field countField = host.findField(unit.getClass(), "O");
-        Object queue = queueField.get(unit);
-        Object countObject = countField.get(unit);
-        if (queue == null || !(countObject instanceof Number)) return result;
-        int count = Math.max(0, Math.min(((Number) countObject).intValue(),
-                Array.getLength(queue)));
-        for (int i = 0; i < count; i++) {
-            Object order = Array.get(queue, i);
-            if (order == null) continue;
-            try {
-                Object copy = copyOrder(order);
-                if (copy != null) result.add(copy);
-            } catch (Throwable t) {
-                host.log(5, TAG, "Native order snapshot skipped", t);
-            }
-        }
-        Long id = unitId(unit);
-        if (id != null) {
-            synchronized (overflowOrders) {
-                ArrayDeque<Object> overflow = overflowOrders.get(id);
-                if (overflow != null && !overflow.isEmpty()) {
-                    for (Object order : overflow) {
-                        try {
-                            Object copy = copyOrder(order);
-                            if (copy != null) result.add(copy);
-                        } catch (Throwable t) {
-                            host.log(5, TAG, "Overflow order snapshot skipped", t);
-                        }
-                    }
-                }
-            }
-        }
-        return result;
+    private boolean isReclaimBuilding(Object unit) throws Throwable {
+        if (unit == null) return false;
+        Class<?> building = loader.loadClass(host.target("game.units.d.f"));
+        return building.isInstance(unit);
     }
 
     private Object copyOrder(Object order) throws Throwable {
@@ -889,28 +1034,40 @@ final class SegmentCommands {
         return copy;
     }
 
-    private void replayTransportOrders(Object unit, List<Object> orders) throws Throwable {
-        if (!enabled() || orders == null || orders.isEmpty()) return;
-        try {
-            replayingTransport.set(Boolean.TRUE);
-            boolean append = false;
-            for (Object order : orders) {
-                Object command = createCommandForUnit(unit);
-                if (command == null) break;
-                setBoolean(command, "e", append);
-                setBoolean(command, "h", true);
-                if (!applyNativeOrder(command, order)) break;
-                addOneUnit(command, unit);
-                append = true;
+    private ArrayList<Object> copyPendingOrders(Object unit) throws Throwable {
+        ArrayList<Object> result = new ArrayList<>();
+        Field queueField = host.findField(unit.getClass(), "Q");
+        Field countField = host.findField(unit.getClass(), "O");
+        Object queue = queueField.get(unit);
+        Object countObject = countField.get(unit);
+        if (queue != null && countObject instanceof Number) {
+            int count = Math.max(0, Math.min(((Number) countObject).intValue(),
+                    Array.getLength(queue)));
+            for (int i = 0; i < count; i++) {
+                Object order = Array.get(queue, i);
+                if (order == null) continue;
+                Object copy = copyOrder(order);
+                if (copy != null) result.add(copy);
             }
-        } finally {
-            replayingTransport.remove();
         }
+        Long id = unitId(unit);
+        if (id != null) {
+            synchronized (overflowOrders) {
+                ArrayDeque<Object> overflow = overflowOrders.get(id);
+                if (overflow != null) {
+                    for (Object order : overflow) {
+                        Object copy = copyOrder(order);
+                        if (copy != null) result.add(copy);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     private boolean applyNativeOrder(Object command, Object order) throws Throwable {
         String name = orderTypeName(order);
-        Class<?> target = loader.loadClass(host.target("game.units.ce"));
+        Class<?> target = targetUnitClass;
         if ("move".equals(name)) {
             Method method = exactMethod(command.getClass(), "a", float.class, float.class);
             if (method == null) return false;
@@ -937,9 +1094,8 @@ final class SegmentCommands {
         if ("loadInto".equals(name)) return invokeTarget(command, "e", target, targetUnit);
         if ("loadUp".equals(name)) return invokeTarget(command, "f", target, targetUnit);
         if ("build".equals(name)) {
-            Class<?> buildType = loader.loadClass(host.target("game.units.el"));
             Method method = exactMethod(command.getClass(), "a", float.class, float.class,
-                    buildType, int.class);
+                    buildTypeClass, int.class);
             if (method == null) return false;
             method.invoke(command, numberField(order, "e"), numberField(order, "f"),
                     host.findFieldValue(order, "b"), intField(order, "d"));
@@ -957,6 +1113,15 @@ final class SegmentCommands {
         return true;
     }
 
+    private float numberField(Object object, String name) throws Throwable {
+        return host.number(host.findFieldValue(object, name));
+    }
+
+    private int intField(Object object, String name) throws Throwable {
+        Object value = host.findFieldValue(object, name);
+        return value instanceof Number ? ((Number) value).intValue() : 0;
+    }
+
     private void invokeModuleOwned(Method method, Object receiver, Object... args)
             throws Throwable {
         moduleOwnedOrder.set(Boolean.TRUE);
@@ -967,19 +1132,9 @@ final class SegmentCommands {
         }
     }
 
-    private float numberField(Object object, String name) throws Throwable {
-        return host.number(host.findFieldValue(object, name));
-    }
-
-    private int intField(Object object, String name) throws Throwable {
-        Object value = host.findFieldValue(object, name);
-        return value instanceof Number ? ((Number) value).intValue() : 0;
-    }
-
-
     private String orderTypeName(Object order) throws Throwable {
         if (order == null) return null;
-        for (String name : new String[]{"a", "f521a"}) {
+        for (String name : ORDER_TYPE_FIELDS) {
             try {
                 Object value = host.findFieldValue(order, name);
                 if (value instanceof Enum) return ((Enum<?>) value).name();
@@ -1028,13 +1183,10 @@ final class SegmentCommands {
         }
     }
 
-    /** Cancel by issuing the game's native move order at each current position. */
     private void sendStopCommand(List<Object> units, Object me) throws Throwable {
         if (units.isEmpty() || me == null) return;
         Object engine = host.findEngine(loader);
         Object queue = host.findField(engine.getClass(), "cc").get(engine);
-        Class<?> teamClass = loader.loadClass(host.target("game.p"));
-        Class<?> unitClass = loader.loadClass(host.target("game.units.bp"));
         Method create = exactMethod(queue.getClass(), "a", teamClass);
         if (create == null) throw new NoSuchMethodException("command queue create(team)");
         for (Object unit : units) {
@@ -1070,9 +1222,6 @@ final class SegmentCommands {
         }
         if (!result.isEmpty()) return result;
 
-        // Some repackaged builds replace the global registry container. Keep
-        // the UI selection collection only as a compatibility fallback.
-        // 部分改包版本替换了全局单位容器，因此保留界面选中集合为兼容回退。
         Object ui = host.findField(engine.getClass(), "bP").get(engine);
         Object selected = host.findFieldValue(ui, "bZ");
         if (selected instanceof Iterable) {
@@ -1103,22 +1252,9 @@ final class SegmentCommands {
         }
     }
 
-    private void clearTransportTracking(Long id) {
-        if (id == null) return;
-        synchronized (transportContinuationIds) {
-            transportContinuationIds.remove(id);
-            transportSnapshots.remove(id);
-        }
-        clearOverflow(id);
-    }
-
     private void clearAll() {
         synchronized (states) {
             states.clear();
-        }
-        synchronized (transportContinuationIds) {
-            transportContinuationIds.clear();
-            transportSnapshots.clear();
         }
         synchronized (overflowOrders) {
             overflowOrders.clear();
@@ -1139,6 +1275,10 @@ final class SegmentCommands {
     }
 
     private Method exactMethod(Class<?> type, String name, Class<?>... parameters) {
+        ExactMethodKey key = new ExactMethodKey(type, name, parameters);
+        Method cached = exactMethods.get(key);
+        if (cached != null) return cached;
+        if (missingExactMethods.contains(key)) return null;
         Class<?> current = type;
         while (current != null) {
             for (Method method : current.getDeclaredMethods()) {
@@ -1154,12 +1294,39 @@ final class SegmentCommands {
                 }
                 if (exact) {
                     method.setAccessible(true);
+                    exactMethods.putIfAbsent(key, method);
                     return method;
                 }
             }
             current = current.getSuperclass();
         }
+        missingExactMethods.add(key);
         return null;
+    }
+
+    private static final class ExactMethodKey {
+        final Class<?> type;
+        final String name;
+        final Class<?>[] parameters;
+        final int hash;
+
+        ExactMethodKey(Class<?> type, String name, Class<?>[] parameters) {
+            this.type = type;
+            this.name = name;
+            this.parameters = parameters;
+            this.hash = 31 * (31 * System.identityHashCode(type) + name.hashCode())
+                    + java.util.Arrays.hashCode(parameters);
+        }
+
+        @Override public int hashCode() { return hash; }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof ExactMethodKey)) return false;
+            ExactMethodKey key = (ExactMethodKey) other;
+            return type == key.type && Objects.equals(name, key.name)
+                    && java.util.Arrays.equals(parameters, key.parameters);
+        }
     }
 
     private boolean enabled() {
@@ -1174,15 +1341,18 @@ final class SegmentCommands {
         boolean started;
     }
 
-    private static final class TransportSnapshot {
-        final Object transport;
-        final Object unit;
-        final ArrayList<Object> orders;
+    private static final class BuildOverlap {
+        final Object type;
+        final int variant;
+        final float x;
+        final float y;
 
-        TransportSnapshot(Object transport, Object unit, ArrayList<Object> orders) {
-            this.transport = transport;
-            this.unit = unit;
-            this.orders = orders;
+        BuildOverlap(Object type, int variant, float x, float y) {
+            this.type = type;
+            this.variant = variant;
+            this.x = x;
+            this.y = y;
         }
     }
+
 }

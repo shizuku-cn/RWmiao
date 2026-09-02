@@ -8,7 +8,6 @@ import android.os.Bundle;
 
 import com.shizuku.rwmiao.BuildConfig;
 
-/** Sends the injected page's theme choice to the module-owned provider. */
 public final class LauncherIconController {
     private static final Uri AUTHORITY = Uri.parse(
             "content://" + BuildConfig.APPLICATION_ID + ".icon-theme");
@@ -20,9 +19,21 @@ public final class LauncherIconController {
     }
 
     public static void sync(Context context, int themeMode, boolean dynamicColor) {
+        sync(
+                context,
+                themeMode,
+                dynamicColor
+                        ? com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_DYNAMIC
+                        : com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_DEFAULT,
+                dynamicColor);
+    }
+
+    public static void sync(
+            Context context, int themeMode, int colorMode, boolean dynamicColor) {
         try {
             Bundle args = new Bundle();
             args.putInt(IconThemeProvider.ARG_THEME_MODE, themeMode);
+            args.putInt(IconThemeProvider.ARG_COLOR_MODE, colorMode);
             args.putBoolean(IconThemeProvider.ARG_DYNAMIC_COLOR, dynamicColor);
             context.getContentResolver().call(
                     AUTHORITY,
@@ -30,19 +41,16 @@ public final class LauncherIconController {
                     null,
                     args);
         } catch (Throwable ignored) {
-            // Some injected processes cannot resolve an exported provider.
         }
         try {
-            // Explicit broadcasts are a second transport. This avoids relying on
-            // provider lookup/package visibility from the target game's process.
             Intent intent = new Intent(ThemeSyncReceiver.ACTION_SYNC_THEME)
                     .setComponent(RECEIVER)
                     .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                     .putExtra(IconThemeProvider.ARG_THEME_MODE, themeMode)
+                    .putExtra(IconThemeProvider.ARG_COLOR_MODE, colorMode)
                     .putExtra(IconThemeProvider.ARG_DYNAMIC_COLOR, dynamicColor);
             context.sendBroadcast(intent);
         } catch (Throwable ignored) {
-            // The settings UI must remain usable if a ROM blocks both transports.
         }
     }
 
@@ -55,7 +63,6 @@ public final class LauncherIconController {
                     android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                     android.content.pm.PackageManager.DONT_KILL_APP);
         } catch (Throwable ignored) {
-            // A launcher migration failure must not break the module page.
         }
     }
 }

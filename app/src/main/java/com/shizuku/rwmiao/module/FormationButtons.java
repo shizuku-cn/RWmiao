@@ -14,16 +14,6 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_FORMATION_BUTTON_CO
 import static com.shizuku.rwmiao.config.SettingsContract.MAX_FORMATION_BUTTON_COUNT;
 import static com.shizuku.rwmiao.config.SettingsContract.MIN_FORMATION_BUTTON_COUNT;
 
-/**
- * Extends the native formation strip without creating an Android overlay.
- *
- * The target keeps ten native av objects, but its renderer currently contains
- * a literal "i < 3". When this feature is explicitly configured to a value
- * different from the target default, the hook skips only that native drawing
- * branch and calls the same f.a.i button helper for all requested slots. The
- * helper owns both the native look and the native hit state; group mutations
- * are also performed through av/i's native methods on the render thread.
- */
 final class FormationButtons {
     private static final String TAG = "RWmiao";
 
@@ -85,15 +75,8 @@ final class FormationButtons {
         refreshSettings();
     }
 
-    /**
-     * Hook installation is preference-driven. An absent preference, or a
-     * value equal to the detected native default, leaves the game untouched.
-     */
     synchronized void refreshSettings() throws Throwable {
         boolean explicitlyConfigured = host.preferenceContains(KEY_FORMATION_BUTTON_COUNT);
-        // Once our hook has applied visibility, av.g reflects our requested
-        // count rather than the build's constructor default. Keep the
-        // original detection cached until the hook is removed.
         int detected = renderHook == null ? detectNativeDefault() : nativeDefault;
         if (detected >= MIN_FORMATION_BUTTON_COUNT) {
             nativeDefault = detected;
@@ -130,11 +113,6 @@ final class FormationButtons {
                 Math.min(MAX_FORMATION_BUTTON_COUNT, value));
     }
 
-    /**
-     * av.g is written by the game's formation constructor. Counting its
-     * contiguous true prefix keeps the setting compatible with ports that
-     * expose more or fewer than the stock three slots.
-     */
     private int detectNativeDefault() {
         try {
             Object engine = host.findEngine(loader);
@@ -197,7 +175,6 @@ final class FormationButtons {
         resetPointerMethod = host.findNoArgMethod(inputClass, "a");
         selectUnitMethod = host.findCompatibleMethod(inputClass, "c", unitClass);
         if (selectUnitMethod == null) {
-            // A few old builds expose the selection overload under a(a, bool).
             selectUnitMethod = host.findCompatibleMethod(inputClass, "a", unitClass, boolean.class);
         }
         if (groupAddMethod == null || clearSelectionMethod == null || selectUnitMethod == null) {
@@ -281,8 +258,6 @@ final class FormationButtons {
                 }
             }
 
-            // Keep all original group maintenance and keyboard shortcuts, but
-            // suppress only the original i6 < 3 drawing branch.
             boolean oldVisibility = showGroupsField.getBoolean(settings);
             showGroupsField.setBoolean(settings, false);
             Object result;
@@ -294,13 +269,10 @@ final class FormationButtons {
             try {
                 drawNativeGroups(panel, delta);
             } catch (Throwable t) {
-                // Never turn a renderer reflection mismatch into a game crash;
-                // the original frame has already completed and is returned.
                 host.log(5, TAG, "Native formation strip draw failed", t);
             }
             return result;
         });
-        host.log(4, TAG, "Native formation strip hook installed: " + requested);
     }
 
     private void applyNativeSlotVisibility(Object panel, int count) throws Throwable {
@@ -335,11 +307,6 @@ final class FormationButtons {
         int originalStep = ((int) (stripWidth - 20.0f)) / MIN_FORMATION_BUTTON_COUNT;
         if (originalStep <= 0) return;
 
-        // Keep the native button width whenever possible. The native three
-        // slots occupy originalStep * 3; extra slots grow only to the left,
-        // with a hard cap of three times that original strip width. For ten
-        // slots this is a mild shrink instead of compressing all ten into the
-        // original three-slot area.
         int originalBand = originalStep * MIN_FORMATION_BUTTON_COUNT;
         int desiredBand = originalStep * count;
         int maxBand = originalBand * 3;
@@ -354,9 +321,6 @@ final class FormationButtons {
         if (inputPaint == null) return;
         float animationStep = 0.01f * delta;
 
-        // Keep slot 1 at the far right, then number continuously right to
-        // left. This preserves the existing slot-1 anchor while making the
-        // complete strip read 10..1 instead of 10..4,1,2,3.
         for (int visualPosition = 0; visualPosition < count; visualPosition++) {
             int groupIndex = count - 1 - visualPosition;
             Object group = groups.get(groupIndex);
@@ -369,8 +333,6 @@ final class FormationButtons {
                     (int) (100.0f + groupAnimationDField.getFloat(group) * 100.0f));
             String label = groupLabel(input, group, groupIndex);
 
-            // Preserve the native right edge. Extra groups are inserted to
-            // the left of slots 1..3; only the width changes at the cap.
             int x = baseX + visualPosition * step;
             boolean hit = (Boolean) drawButtonMethod.invoke(input, x, y, width, height,
                     label, true, color, inputPaint, false, (Object) null);

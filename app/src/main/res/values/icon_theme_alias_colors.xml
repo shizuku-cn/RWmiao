@@ -3,10 +3,23 @@
     <color name="icon_light_foreground">#6750A4</color>
     <color name="icon_dark_background">#381E72</color>
     <color name="icon_dark_foreground">#D0BCFF</color>
-    <!-- Used when the module page disables dynamic color. These deliberately
-         have no values-v31 override. -->
+    <!-- Static colors used when dynamic color is disabled. / 关闭动态取色时使用的静态颜色。 -->
     <color name="icon_static_light_background">#EADDFF</color>
     <color name="icon_static_light_foreground">#6750A4</color>
     <color name="icon_static_dark_background">#381E72</color>
     <color name="icon_static_dark_foreground">#D0BCFF</color>
+    <color name="icon_green_background">#8BFA8D</color>
+    <color name="icon_green_foreground">#006E1C</color>
+    <color name="icon_blue_background">#D6E3FF</color>
+    <color name="icon_blue_foreground">#415F91</color>
+    <color name="icon_pink_background">#FFD9E6</color>
+    <color name="icon_pink_foreground">#C2185B</color>
+    <color name="icon_yellow_background">#F8E287</color>
+    <color name="icon_yellow_foreground">#6D5F00</color>
+    <color name="icon_orange_background">#FFDBCA</color>
+    <color name="icon_orange_foreground">#A63C00</color>
+    <color name="icon_red_background">#FFDAD6</color>
+    <color name="icon_red_foreground">#BA1A1A</color>
+    <color name="icon_cyan_background">#97F0FF</color>
+    <color name="icon_cyan_foreground">#006874</color>
 </resources>

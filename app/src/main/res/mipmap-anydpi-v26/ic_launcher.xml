@@ -1,5 +1,5 @@
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/icon_background" />
-    <!-- Same two-tone system-accent pattern used by LSPosed on Android 12+. -->
+    <!-- Match the LSPosed two-tone accent pattern. / 匹配 LSPosed 的双色强调色样式。 -->
     <foreground android:drawable="@drawable/ic_launcher_foreground_tinted" />
 </adaptive-icon>

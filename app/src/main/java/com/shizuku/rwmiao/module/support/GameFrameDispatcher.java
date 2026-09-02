@@ -9,7 +9,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import io.github.libxposed.api.XposedInterface;
 
-/** Shares the renderer frame wrapper between optional drawing features. */
 public final class GameFrameDispatcher {
     public interface Callback {
         void afterFrame(Object renderer, float delta) throws Throwable;

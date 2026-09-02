@@ -3,7 +3,6 @@ package com.shizuku.rwmiao.payload;
 import com.corrodinggames.rts.game.units.a.p;
 import com.corrodinggames.rts.game.units.ce;
 
-/** A no-selection action that toggles the module's map gesture mode. */
 public final class RWMiaoFreeSelectionAction extends p {
     public static RWMiaoFreeSelectionAction INST = new RWMiaoFreeSelectionAction();
 

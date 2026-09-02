@@ -9,7 +9,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 
-/** Shared reverse-flow search with destination slots and deterministic lanes. */
 public final class FlowFieldPathfinder {
     private static final int RESERVATION_PENALTY = 8;
     private static final int SMOOTHING_LOOK_AHEAD = 48;
@@ -87,7 +86,6 @@ public final class FlowFieldPathfinder {
         return distance;
     }
 
-    /** Keep neighbouring units in collision-radius-aware lanes around corners. */
     private void applyLaneOffset(SmartPathGrid grid, Input input, List<PointF> route,
                                  int unitIndex, int unitCount) {
         if (route.size() < 2 || unitCount < 2) return;
@@ -254,10 +252,6 @@ public final class FlowFieldPathfinder {
         return result;
     }
 
-    /**
-     * Reserve a narrow corridor after each route. Later units prefer another valid descent,
-     * which avoids reconverging at the exact same corner without running another search.
-     */
     private void reserve(SmartPathGrid grid, List<Integer> raw, int[] reservations,
                          float radius) {
         int halo = Math.max(1,
@@ -319,7 +313,6 @@ public final class FlowFieldPathfinder {
         }
     }
 
-    /** Primitive heap avoids allocating one object for every relaxed grid edge. */
     private static final class IntHeap {
         int[] indexes;
         int[] costs;

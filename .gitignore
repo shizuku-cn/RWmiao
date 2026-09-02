@@ -1,11 +1,11 @@
-# Gradle / Android
+# Gradle and Android / Gradle 与 Android
 .gradle/
 **/build/
 local.properties
 .idea/
 *.iml
 
-# Local caches and logs
+# Local caches and logs / 本机缓存与日志
 gradle-home/
 gradle-user/
 .gradle-local/
@@ -21,9 +21,23 @@ jdks/
 null/
 work/
 *.log
+/native/
+/notifications/
+/dependencies/
 
-# Generated packages
+# Generated packages / 生成的软件包
 *.apk
 *.aab
 发布/
 tools/action-payload/.build/
+
+# Local signing and proprietary references / 本机签名与专有参考文件
+/config/signing/
+/references/game-apks/
+*.keystore
+*.jks
+keystore.properties
+
+# Operating-system files / 操作系统文件
+.DS_Store
+Thumbs.db

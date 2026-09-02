@@ -79,16 +79,18 @@ class SettingsPage(
             .putBoolean(KEY_SHOW_LINE_ACTION, state.showLineAction)
             .putBoolean(KEY_SHOW_ATTACK_RANGE, state.showAttackRange)
             .putBoolean(KEY_SHOW_TARGET_LINE, state.showTargetLine)
-            .putBoolean(KEY_SHOW_AMMO_COUNT, state.showAmmoCount)
             .putBoolean(KEY_SHOW_FACTORY_COUNTDOWN, state.showFactoryCountdown)
             .putBoolean(KEY_VIEW_ALL, state.viewAll)
-            .putBoolean(KEY_ECONOMIC_PANEL, state.economicPanel)
+            .putBoolean(KEY_PLAYER_INFO_PANEL, state.playerInfoPanel)
             .putBoolean(KEY_FACTORY_OPT, state.factoryOpt)
             .putBoolean(KEY_FACTORY_EXIT_THROUGH, state.factoryExitThrough)
             .putBoolean(KEY_REINFORCE_ON, state.reinforceOn)
             .putBoolean(KEY_REINFORCE_WEIGHT_MODE, state.reinforceWeightMode)
             .putBoolean(KEY_SHOW_REINFORCE_PANEL, state.showReinforcePanel)
             .putBoolean(KEY_FREE_SELECTION, state.freeSelection)
+            .putBoolean(KEY_FREE_BUILD, state.freeBuild)
+            .putBoolean(KEY_SELECT_ALL, state.selectAll)
+            .putBoolean(KEY_COMBAT_VIEW, state.combatView)
             .putBoolean(KEY_SEGMENT_COMMAND, state.segmentCommand)
             .putBoolean(KEY_SMART_PATHING, state.smartPathing)
             .putBoolean(KEY_SHOW_SMART_PATH_ACTION, state.showSmartPathAction)
@@ -104,9 +106,6 @@ class SettingsPage(
             .putInt(KEY_LINE_COLOR_SELF, state.lineColors[0])
             .putInt(KEY_LINE_COLOR_ENEMY, state.lineColors[1])
             .putInt(KEY_LINE_COLOR_ALLY, state.lineColors[2])
-            .putInt(KEY_AMMO_COLOR_SELF, state.ammoColors[0])
-            .putInt(KEY_AMMO_COLOR_ENEMY, state.ammoColors[1])
-            .putInt(KEY_AMMO_COLOR_ALLY, state.ammoColors[2])
             .putInt(KEY_FACTORY_COLOR_SELF, state.factoryColors[0])
             .putInt(KEY_FACTORY_COLOR_ENEMY, state.factoryColors[1])
             .putInt(KEY_FACTORY_COLOR_ALLY, state.factoryColors[2])
@@ -128,14 +127,25 @@ class SettingsPage(
     internal fun saveUiPreferences(settings: UiPreferences) {
         preferences.edit()
             .putInt(KEY_UI_THEME_MODE, settings.themeMode)
+            .putInt(KEY_UI_COLOR_MODE, settings.colorMode)
             .putBoolean(KEY_UI_DYNAMIC_COLOR, settings.dynamicColor)
             .putBoolean(KEY_UI_AUTO_CHECK_UPDATE, settings.autoCheckUpdate)
             .apply()
-        LauncherIconController.sync(hostActivity, settings.themeMode, settings.dynamicColor)
+        LauncherIconController.sync(
+            hostActivity,
+            settings.themeMode,
+            settings.colorMode,
+            settings.dynamicColor
+        )
     }
 
     internal fun syncLauncherIcon(settings: UiPreferences) {
-        LauncherIconController.sync(hostActivity, settings.themeMode, settings.dynamicColor)
+        LauncherIconController.sync(
+            hostActivity,
+            settings.themeMode,
+            settings.colorMode,
+            settings.dynamicColor
+        )
     }
 
     internal fun refreshRuntimeHooks() {
@@ -145,7 +155,6 @@ class SettingsPage(
     internal fun formationButtonDefaultCount(): Int =
         RWmiaoModule.defaultFormationButtonCount()
 
-    /** Read the numeric setting; absence is the native two-column state. */
     internal fun selectionPanelColumns(): Int {
         return preferences.getInt(
             KEY_SELECTION_PANEL_COLUMNS,
@@ -166,16 +175,18 @@ internal data class SettingsState(
     val showLineAction: Boolean,
     val showAttackRange: Boolean,
     val showTargetLine: Boolean,
-    val showAmmoCount: Boolean,
     val showFactoryCountdown: Boolean,
     val viewAll: Boolean,
-    val economicPanel: Boolean,
+    val playerInfoPanel: Boolean,
     val factoryOpt: Boolean,
     val factoryExitThrough: Boolean,
     val reinforceOn: Boolean,
     val reinforceWeightMode: Boolean,
     val showReinforcePanel: Boolean,
     val freeSelection: Boolean,
+    val freeBuild: Boolean,
+    val selectAll: Boolean,
+    val combatView: Boolean,
     val segmentCommand: Boolean,
     val smartPathing: Boolean,
     val smartPathingThreshold: Int,
@@ -187,7 +198,6 @@ internal data class SettingsState(
     val factoryPlayerFilter: Int,
     val rangeColors: List<Int>,
     val lineColors: List<Int>,
-    val ammoColors: List<Int>,
     val factoryColors: List<Int>
 ) {
     companion object {
@@ -200,16 +210,18 @@ internal data class SettingsState(
                 showLineAction = prefs.getBoolean(KEY_SHOW_LINE_ACTION, false),
                 showAttackRange = prefs.getBoolean(KEY_SHOW_ATTACK_RANGE, false),
                 showTargetLine = prefs.getBoolean(KEY_SHOW_TARGET_LINE, false),
-                showAmmoCount = prefs.getBoolean(KEY_SHOW_AMMO_COUNT, false),
                 showFactoryCountdown = prefs.getBoolean(KEY_SHOW_FACTORY_COUNTDOWN, false),
                 viewAll = prefs.getBoolean(KEY_VIEW_ALL, false),
-                economicPanel = prefs.getBoolean(KEY_ECONOMIC_PANEL, false),
+                playerInfoPanel = prefs.getBoolean(KEY_PLAYER_INFO_PANEL, false),
                 factoryOpt = prefs.getBoolean(KEY_FACTORY_OPT, false),
                 factoryExitThrough = prefs.getBoolean(KEY_FACTORY_EXIT_THROUGH, false),
                 reinforceOn = prefs.getBoolean(KEY_REINFORCE_ON, false),
                 reinforceWeightMode = prefs.getBoolean(KEY_REINFORCE_WEIGHT_MODE, false),
                 showReinforcePanel = prefs.getBoolean(KEY_SHOW_REINFORCE_PANEL, true),
                 freeSelection = prefs.getBoolean(KEY_FREE_SELECTION, false),
+                freeBuild = prefs.getBoolean(KEY_FREE_BUILD, false),
+                selectAll = prefs.getBoolean(KEY_SELECT_ALL, false),
+                combatView = prefs.getBoolean(KEY_COMBAT_VIEW, false),
                 segmentCommand = prefs.getBoolean(KEY_SEGMENT_COMMAND, false),
                 smartPathing = prefs.getBoolean(KEY_SMART_PATHING, false),
                 smartPathingThreshold = prefs.getInt(
@@ -235,11 +247,6 @@ internal data class SettingsState(
                     prefs.getInt(KEY_LINE_COLOR_ENEMY, DEFAULT_LINE_COLOR_ENEMY),
                     prefs.getInt(KEY_LINE_COLOR_ALLY, DEFAULT_LINE_COLOR_ALLY)
                 ),
-                ammoColors = listOf(
-                    prefs.getInt(KEY_AMMO_COLOR_SELF, DEFAULT_AMMO_COLOR_SELF),
-                    prefs.getInt(KEY_AMMO_COLOR_ENEMY, DEFAULT_AMMO_COLOR_ENEMY),
-                    prefs.getInt(KEY_AMMO_COLOR_ALLY, DEFAULT_AMMO_COLOR_ALLY)
-                ),
                 factoryColors = listOf(
                     prefs.getInt(KEY_FACTORY_COLOR_SELF, DEFAULT_FACTORY_COLOR_SELF),
                     prefs.getInt(KEY_FACTORY_COLOR_ENEMY, DEFAULT_FACTORY_COLOR_ENEMY),
@@ -252,14 +259,26 @@ internal data class SettingsState(
 
 internal data class UiPreferences(
     val themeMode: Int,
-    val dynamicColor: Boolean,
+    val colorMode: Int,
     val autoCheckUpdate: Boolean
 ) {
+    val dynamicColor: Boolean
+        get() = colorMode == UI_COLOR_DYNAMIC
+
     companion object {
         fun load(prefs: android.content.SharedPreferences): UiPreferences {
+            val colorMode = if (prefs.contains(KEY_UI_COLOR_MODE)) {
+                prefs.getInt(KEY_UI_COLOR_MODE, UI_COLOR_DEFAULT)
+            } else if (prefs.contains(KEY_UI_DYNAMIC_COLOR) &&
+                prefs.getBoolean(KEY_UI_DYNAMIC_COLOR, false)
+            ) {
+                UI_COLOR_DYNAMIC
+            } else {
+                UI_COLOR_DEFAULT
+            }
             return UiPreferences(
                 themeMode = prefs.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM),
-                dynamicColor = prefs.getBoolean(KEY_UI_DYNAMIC_COLOR, true),
+                colorMode = colorMode.coerceIn(UI_COLOR_DEFAULT, UI_COLOR_CYAN),
                 autoCheckUpdate = prefs.getBoolean(KEY_UI_AUTO_CHECK_UPDATE, false)
             )
         }

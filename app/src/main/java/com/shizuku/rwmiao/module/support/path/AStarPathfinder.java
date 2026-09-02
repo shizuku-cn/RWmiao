@@ -6,10 +6,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.PriorityQueue;
 import java.util.function.BooleanSupplier;
 
-/** Eight-direction A* with native-grid collision checks and LOS smoothing. */
 public final class AStarPathfinder {
     private static final int[] DX = {-1, 1, 0, 0, -1, -1, 1, 1};
     private static final int[] DY = {0, 0, 1, -1, 1, -1, 1, -1};
@@ -22,11 +20,41 @@ public final class AStarPathfinder {
 
     public List<PointF> find(SmartPathGrid grid, float startWorldX, float startWorldY,
                              float targetWorldX, float targetWorldY, BooleanSupplier cancelled) {
+        return find(grid, startWorldX, startWorldY, targetWorldX, targetWorldY,
+                false, 0.0f, cancelled);
+    }
+
+    public List<PointF> findActionApproach(SmartPathGrid grid,
+                                           float startWorldX, float startWorldY,
+                                           float targetWorldX, float targetWorldY,
+                                           BooleanSupplier cancelled) {
+        return find(grid, startWorldX, startWorldY, targetWorldX, targetWorldY,
+                true, 0.0f, cancelled);
+    }
+
+    public List<PointF> findActionApproach(SmartPathGrid grid,
+                                           float startWorldX, float startWorldY,
+                                           float targetWorldX, float targetWorldY,
+                                           float targetRadiusWorld,
+                                           BooleanSupplier cancelled) {
+        return find(grid, startWorldX, startWorldY, targetWorldX, targetWorldY,
+                true, Math.max(0.0f, targetRadiusWorld), cancelled);
+    }
+
+    private List<PointF> find(SmartPathGrid grid, float startWorldX, float startWorldY,
+                              float targetWorldX, float targetWorldY,
+                              boolean stopOnClearApproach, float targetRadiusWorld,
+                              BooleanSupplier cancelled) {
         if (grid == null || !grid.valid()) return Collections.emptyList();
         int sx = clamp((int) (startWorldX * grid.worldToGrid), 0, grid.width - 1);
         int sy = clamp((int) (startWorldY * grid.worldToGrid), 0, grid.height - 1);
         int requestedX = clamp((int) (targetWorldX * grid.worldToGrid), 0, grid.width - 1);
         int requestedY = clamp((int) (targetWorldY * grid.worldToGrid), 0, grid.height - 1);
+        if (stopOnClearApproach
+                && clearActionApproach(grid, sx, sy, requestedX, requestedY,
+                targetRadiusWorld)) {
+            return Collections.emptyList();
+        }
         int target = nearestPassable(grid, requestedX, requestedY);
         if (target < 0) return Collections.emptyList();
         int tx = target % grid.width;
@@ -53,8 +81,8 @@ public final class AStarPathfinder {
         int start = index(grid, sx, sy);
         cost[start] = 0;
         parent[start] = -1;
-        PriorityQueue<Node> open = new PriorityQueue<>();
-        open.add(new Node(start, 0, heuristic(sx, sy, tx, ty)));
+        IntHeap open = new IntHeap(64);
+        open.add(start, 0, heuristic(sx, sy, tx, ty));
         int bestReachable = start;
         int bestTargetDistance = squared(sx - requestedX, sy - requestedY);
         int bestPathCost = Integer.MAX_VALUE;
@@ -64,22 +92,29 @@ public final class AStarPathfinder {
             if ((expanded & 127) == 0 && cancelled.getAsBoolean()) {
                 return Collections.emptyList();
             }
-            Node node = open.poll();
-            if (closed[node.index] || node.g != cost[node.index]) continue;
-            int nodeX = node.index % grid.width;
-            int nodeY = node.index / grid.width;
+            int nodeIndex = open.pollIndex();
+            int nodeCost = open.lastG;
+            if (closed[nodeIndex] || nodeCost != cost[nodeIndex]) continue;
+            int nodeX = nodeIndex % grid.width;
+            int nodeY = nodeIndex / grid.width;
             int targetDistance = squared(nodeX - requestedX, nodeY - requestedY);
             if (targetDistance < bestTargetDistance
-                    || targetDistance == bestTargetDistance && node.g < bestPathCost) {
-                bestReachable = node.index;
+                    || targetDistance == bestTargetDistance && nodeCost < bestPathCost) {
+                bestReachable = nodeIndex;
                 bestTargetDistance = targetDistance;
-                bestPathCost = node.g;
+                bestPathCost = nodeCost;
             }
-            if (node.index == target) {
+            if (stopOnClearApproach && nodeIndex != start
+                    && clearActionApproach(grid, nodeX, nodeY, requestedX, requestedY,
+                    targetRadiusWorld)) {
+                return toWorldPath(grid, smooth(grid, reconstruct(parent, nodeIndex)),
+                        false, targetWorldX, targetWorldY);
+            }
+            if (nodeIndex == target) {
                 return toWorldPath(grid, smooth(grid, reconstruct(parent, target)),
                         requestedX == tx && requestedY == ty, targetWorldX, targetWorldY);
             }
-            closed[node.index] = true;
+            closed[nodeIndex] = true;
             int x = nodeX;
             int y = nodeY;
             for (int direction = 0; direction < DX.length; direction++) {
@@ -90,12 +125,11 @@ public final class AStarPathfinder {
                 if (diagonal && (!grid.passable(nx, y) || !grid.passable(x, ny))) continue;
                 int next = index(grid, nx, ny);
                 if (closed[next]) continue;
-                int nextCost = node.g + (diagonal ? 14 : 10);
+                int nextCost = nodeCost + (diagonal ? 14 : 10);
                 if (nextCost >= cost[next]) continue;
                 cost[next] = nextCost;
-                parent[next] = node.index;
-                open.add(new Node(next, nextCost,
-                        nextCost + heuristic(nx, ny, tx, ty)));
+                parent[next] = nodeIndex;
+                open.add(next, nextCost, nextCost + heuristic(nx, ny, tx, ty));
             }
         }
         if (bestReachable != start) {
@@ -103,6 +137,13 @@ public final class AStarPathfinder {
                     false, targetWorldX, targetWorldY);
         }
         return Collections.emptyList();
+    }
+
+    private boolean clearActionApproach(SmartPathGrid grid,
+                                        int x, int y, int targetX, int targetY,
+                                        float targetRadiusWorld) {
+        return grid.lineOfSightToTargetFootprint(x, y, targetX, targetY,
+                targetRadiusWorld * grid.worldToGrid);
     }
 
     private int nearestPassable(SmartPathGrid grid, int targetX, int targetY) {
@@ -208,21 +249,75 @@ public final class AStarPathfinder {
         return Math.max(minimum, Math.min(maximum, value));
     }
 
-    private static final class Node implements Comparable<Node> {
-        final int index;
-        final int g;
-        final int f;
+    private static final class IntHeap {
+        int[] indexes;
+        int[] costs;
+        int[] priorities;
+        int size;
+        int lastG;
 
-        Node(int index, int g, int f) {
-            this.index = index;
-            this.g = g;
-            this.f = f;
+        IntHeap(int capacity) {
+            indexes = new int[capacity];
+            costs = new int[capacity];
+            priorities = new int[capacity];
         }
 
-        @Override
-        public int compareTo(Node other) {
-            int byF = Integer.compare(f, other.f);
-            return byF != 0 ? byF : Integer.compare(g, other.g);
+        boolean isEmpty() {
+            return size == 0;
+        }
+
+        void add(int index, int cost, int priority) {
+            if (size == indexes.length) {
+                int next = size * 2;
+                indexes = Arrays.copyOf(indexes, next);
+                costs = Arrays.copyOf(costs, next);
+                priorities = Arrays.copyOf(priorities, next);
+            }
+            int child = size++;
+            while (child > 0) {
+                int parent = (child - 1) >>> 1;
+                if (!less(priority, cost, priorities[parent], costs[parent])) break;
+                indexes[child] = indexes[parent];
+                costs[child] = costs[parent];
+                priorities[child] = priorities[parent];
+                child = parent;
+            }
+            indexes[child] = index;
+            costs[child] = cost;
+            priorities[child] = priority;
+        }
+
+        int pollIndex() {
+            int result = indexes[0];
+            lastG = costs[0];
+            int last = --size;
+            int lastIndex = indexes[last];
+            int lastCost = costs[last];
+            int lastPriority = priorities[last];
+            int parent = 0;
+            while (true) {
+                int left = parent * 2 + 1;
+                if (left >= size) break;
+                int right = left + 1;
+                int child = right < size
+                        && less(priorities[right], costs[right],
+                        priorities[left], costs[left]) ? right : left;
+                if (!less(priorities[child], costs[child], lastPriority, lastCost)) break;
+                indexes[parent] = indexes[child];
+                costs[parent] = costs[child];
+                priorities[parent] = priorities[child];
+                parent = child;
+            }
+            if (size > 0) {
+                indexes[parent] = lastIndex;
+                costs[parent] = lastCost;
+                priorities[parent] = lastPriority;
+            }
+            return result;
+        }
+
+        private static boolean less(int f0, int g0, int f1, int g1) {
+            return f0 < f1 || f0 == f1 && g0 < g1;
         }
     }
 }

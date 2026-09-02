@@ -6,7 +6,6 @@ import com.corrodinggames.rts.game.units.a.u;
 import com.corrodinggames.rts.game.units.ce;
 import com.corrodinggames.rts.game.units.el;
 
-/** Local action controlling smart routing for the selected units. */
 public final class RWMiaoSmartPathAction extends s {
     public static RWMiaoSmartPathAction INST = new RWMiaoSmartPathAction();
     public RWMiaoSmartPathAction() { super("c__cut_rwmiao_smart_path"); }

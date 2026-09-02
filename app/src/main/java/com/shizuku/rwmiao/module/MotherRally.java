@@ -4,14 +4,6 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_MOTHER_RALLY;
 
 import java.lang.reflect.Method;
 
-/**
- * Resolves the game's producer capability used by the native set-rally action.
- *
- * The game exposes the same producer interface for ordinary factories and
- * producer units.  Existing native actions are de-duplicated in the payload,
- * so the same capability check also covers producer buildings or mobile
- * producer units whose game variant does not expose the native entry.
- */
 final class MotherRally {
     private final RWmiaoModule host;
     private final ClassLoader loader;
@@ -29,8 +21,6 @@ final class MotherRally {
     }
 
     void refreshSettings() {
-        // No target hook is installed by this feature.  SelectionActions owns
-        // the single UI hook and installs it only while this switch is on.
     }
 
     boolean enabled() {
@@ -45,10 +35,6 @@ final class MotherRally {
     }
 
     private boolean ensureRallyCapability(Object unit) {
-        // Custom producer units guard the native setter with their unit
-        // definition's dc flag.  Enable that same native path before adding
-        // the action, so the injected button is functional even when the
-        // unit definition did not declare a rally action itself.
         if (unit.getClass().getName().equals(host.target("game.units.custom.j"))) {
             try {
                 Object definition = host.findFieldValue(unit, "x");
@@ -81,8 +67,6 @@ final class MotherRally {
                 if (producedType != null && producedType.invoke(action) != null) return true;
             }
         } catch (Throwable ignored) {
-            // Unknown unit variants remain hidden instead of receiving a
-            // button that cannot be serviced by the native action handler.
         }
         return false;
     }

@@ -4,14 +4,12 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/** Stable, immutable unit data exposed to automation logic. */
 public final class UnitSnapshot {
     public final long id;
     public final String typeId;
     public final String typeName;
     public final int teamId;
     public final String teamName;
-    /** 0 self, 1 enemy, 2 ally/neutral. */
     public final int relation;
     public final float x, y, height, heading, radius;
     public final float health, maxHealth, shield, maxShield, buildProgress;
@@ -26,7 +24,6 @@ public final class UnitSnapshot {
     public final Float orderX, orderY;
     public final List<String> actionIds;
     public final List<String> buildableTypes;
-    /** Version-adapter data which can be extended without changing the stable constructor. */
     public final Map<String,Object> extras;
     final Object raw;
 

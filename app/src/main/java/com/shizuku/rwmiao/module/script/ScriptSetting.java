@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 
-/** A validated, declarative setting rendered by the module UI. */
 public final class ScriptSetting {
     public static final String BOOLEAN="boolean", NUMBER="number", CHOICE="choice", TEXT="text";
     public static final String SWITCH="switch", SLIDER="slider", INPUT="input", CHOICE_COMPONENT="choice";

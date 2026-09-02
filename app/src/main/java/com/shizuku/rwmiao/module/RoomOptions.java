@@ -25,15 +25,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 
-/**
- * 房间选项扩展。
- * room-options extension.
- *
- * <p>界面与目标游戏反射逻辑分离；本类只负责按钮拦截、房间状态读写，以及
- * 房主侧的 Ban 命令校验。</p>
- * The UI is separated from target reflection; this class owns interception,
- * state updates, and the authoritative host-side Ban check.</p>
- */
 public final class RoomOptions {
     private static final String TAG = "RWmiao";
     private static final int MIN_ROOM_PLAYERS = 10;
@@ -45,25 +36,18 @@ public final class RoomOptions {
     private final ClassLoader loader;
     private final Map<Object, Set<String>> bannedByNetwork =
             Collections.synchronizedMap(new WeakHashMap<>());
-    /** 防止同一局游戏因初始化回调重复广播。/ Avoid duplicate broadcasts for one match. */
     private final Set<Object> banStartBroadcastGames =
             Collections.newSetFromMap(new WeakHashMap<>());
-    /** 同一单位的禁用提示广播冷却 10 秒。/ Per-unit cooldown for ban-warning broadcasts. */
     private static final long BAN_MESSAGE_COOLDOWN_MS = 10_000L;
     private final Object banMessageCooldownLock = new Object();
     private final Map<String, Long> banMessageCooldownUntil = new LinkedHashMap<>();
-    /** 当前房间的权威 Ban 集合。/ Active authoritative ban set for the current room. */
     private volatile Object activeBannedNetwork;
     private volatile Set<String> activeBannedUnits = Collections.emptySet();
-    /** 游戏开始阶段会重读这个值，因此不能只改房间 UI 字段。 */
-    /** The game reloads this value during start, so changing the room UI field alone is insufficient. */
     private volatile int activeUnitCap = -1;
 
     private final Object runtimeHooksLock = new Object();
     private volatile boolean runtimeHooksInstalled;
     private volatile boolean banHooksInstalled;
-    /** Stores the translated unit name until the native desync callback sends its message. */
-    /** 在原版 desync 回调发送提示前暂存被 Ban 单位的游戏翻译名。 */
     private final ThreadLocal<String> bannedCommandRejected = new ThreadLocal<>();
     private XposedInterface.HookHandle banValidateHook;
     private XposedInterface.HookHandle banExecuteHook;
@@ -83,9 +67,6 @@ public final class RoomOptions {
     }
 
     void install() throws Throwable {
-        // Resolve the owner Activity before the listener class. This keeps the
-        // direct ft.onClick hook tied to the original battleroom entry path.
-        // 先解析房间 Activity，再解析监听器类，确保直接 Hook 始终绑定原生入口。
         loader.loadClass(host.target("appFramework.MultiplayerBattleroomActivity"));
         Class<?> clickListener = loader.loadClass(host.target("appFramework.ft"));
         gameOptionsClickMethod = host.findCompatibleMethod(
@@ -106,10 +87,6 @@ public final class RoomOptions {
     }
 
     private synchronized void ensureEntryHooks() {
-        // ft.onClick 是原版“游戏选项”按钮的真正监听器。
-        // ft.onClick is the real listener for the vanilla button.
-        // 只在开关打开且当前为房主时直接返回，关闭开关则继续执行原方法。
-        // Return only for an enabled host; otherwise continue into the vanilla method.
         if (gameOptionsClickHook == null && gameOptionsClickMethod != null) {
             gameOptionsClickHook = host.hookExecutable(gameOptionsClickMethod, chain -> {
                 try {
@@ -127,18 +104,12 @@ public final class RoomOptions {
                         }
                     }
                 } catch (Throwable t) {
-                    // Never let a reflection failure disable the game's original dialog.
-                    // 反射失败时必须继续原版点击逻辑，不能让按钮失效或导致闪退。
                     host.log(4, TAG, "拦截游戏选项按钮失败，保留原版行为", t);
                 }
                 return chain.proceed();
             });
         }
 
-        // 不在模块加载阶段安装命令/单位上限 Hook。只有房主打开扩展面板后，
-        // ensureUnitCapHooksInstalled()/ensureBanHooksInstalled() 才会按需安装它们。
-        // Do not install command/cap hooks during module loading. They are installed
-        // only after the host actually opens the extended panel.
     }
 
     private synchronized void unhookEntryHooks() {
@@ -147,10 +118,6 @@ public final class RoomOptions {
     }
 
     private Activity activityFromClickListener(Object listener, Object clickedView) {
-        // The View is the most reliable owner source. The listener field name is
-        // obfuscated and can vary across game builds, while the clicked Button's
-        // Context always belongs to the battleroom Activity.
-        // 优先从按钮 Context 取 Activity；混淆字段名变化时不依赖 f180a。
         if (clickedView instanceof View) {
             Activity activity = activityFromContext(((View) clickedView).getContext());
             if (activity != null) return activity;
@@ -190,15 +157,12 @@ public final class RoomOptions {
                     SettingsContract.PREFS_NAME, Context.MODE_PRIVATE).getBoolean(
                     SettingsContract.KEY_EXTENDED_GAME_OPTIONS, false);
         } catch (Throwable t) {
-            // 读取失败时保留原版行为，避免影响未启用扩展功能的玩家。
-            // Fall back to vanilla behavior if preferences cannot be read.
             return false;
         }
     }
 
     private boolean showHostDialog(Activity activity, Object network) {
         try {
-            // Unit-cap and Ban hooks are separate.
             try {
                 ensureUnitCapHooksInstalled();
             } catch (Throwable t) {
@@ -246,35 +210,22 @@ public final class RoomOptions {
         Class<?> commandClass = loader.loadClass(host.target("gameFramework.e"));
         banReflection = createBanReflection(commandClass);
 
-        // e.i() is retained as an early check for commands that already contain their
-        // payload. For normal UI production/build commands, e.i() runs before the
-        // payload is filled, so e.h() below is the authoritative final check.
         Method validate = commandClass.getDeclaredMethod("i");
         banValidateHook = host.hookExecutable(validate, chain -> {
             String bannedUnitName = bannedUnitNameInCommand(chain.getThisObject());
             if (bannedUnitName != null) {
-                // ae.D handles this false result by calling ae.a("Skipped...").
-                // 标记后由 ae.a Hook 将原版提示替换为可同步广播的自定义文本。
                 bannedCommandRejected.set(bannedUnitName);
                 return false;
             }
             return chain.proceed();
         });
 
-        // h() runs after network commands are decoded and after local commands have
-        // received their build/action payload, so unmodified clients are covered too.
         Method execute = commandClass.getDeclaredMethod("h");
         banExecuteHook = host.hookExecutable(execute, chain -> {
             if (bannedUnitNameInCommand(chain.getThisObject()) != null) return null;
             return chain.proceed();
         });
 
-        // Server-side ingress is the authoritative multiplayer boundary. A client
-        // command is decoded into e.A (unit network IDs), checked by e.i(), and
-        // only then passed to ae.a(e) for broadcast. Keep this second guard so a
-        // command that reaches the enqueue path can never be rebroadcast.
-        // 服务器端入站是多人同步的权威边界：客户端命令先解码到 e.A（单位网络 ID），
-        // 经过 e.i() 后才会进入 ae.a(e) 广播。这里再拦一次，避免漏网命令被转发。
         Class<?> networkClass = loader.loadClass(host.target("gameFramework.j.ae"));
         Method commandIngress = networkClass.getDeclaredMethod("a", commandClass);
         banCommandIngressHook = host.hookExecutable(commandIngress, chain -> {
@@ -287,9 +238,6 @@ public final class RoomOptions {
             return chain.proceed();
         });
 
-        // The host broadcasts this native message to every client, including
-        // unmodified clients. Replace it before the broadcast, not only in the module UI.
-        // 房主会把这条原生提示广播给所有客户端；在广播前替换。
         Method desyncMessage = networkClass.getDeclaredMethod(
                 "a", String.class, boolean.class);
         desyncMessageHook = host.hookExecutable(desyncMessage, chain -> {
@@ -307,10 +255,6 @@ public final class RoomOptions {
             return chain.proceed();
         });
 
-        // game.i.a(...) runs when the live match is initialized. Broadcast the
-        // authoritative Ban list after vanilla initialization, once per game.
-        // game.i.a(...) 在实际对局初始化时执行；原版初始化完成后向全体玩家广播
-        // 权威 Ban 列表，并按 game 实例去重，避免重入或重试产生多条相同消息。
         Class<?> gameClass = loader.loadClass(host.target("game.i"));
         Method startGame = gameClass.getDeclaredMethod(
                 "a", boolean.class, boolean.class, int.class);
@@ -320,9 +264,6 @@ public final class RoomOptions {
             return result;
         });
 
-        // 生产队列的最终入口，覆盖 AI/本地直接入队以及网络命令路径。
-        // Final production-queue entry; covers AI/local direct queueing as well as
-        // network-command paths. The boolean=true branch is cancellation and remains allowed.
         try {
             Class<?> queueClass = loader.loadClass(host.target("game.units.d.r"));
             Class<?> actionClass = loader.loadClass(host.target("game.units.a.s"));
@@ -336,9 +277,6 @@ public final class RoomOptions {
                 return chain.proceed();
             });
         } catch (Throwable t) {
-            // 命令 e.i/e.h 仍是网络房主的权威拦截点；队列 Hook 只作为 AI/本地直入队补强。
-            // e.i/e.h remain authoritative for network-host enforcement; this queue hook
-            // is an additional guard for AI/local direct queue insertion.
             host.log(4, TAG, "生产队列补强 Hook 不可用，继续使用命令拦截", t);
         }
     }
@@ -392,7 +330,6 @@ public final class RoomOptions {
     }
 
     private void installUnitCapHooks() throws Throwable {
-        // ae.a(boolean) reloads the cap from SettingsEngine before a match starts.
         Class<?> networkClass = loader.loadClass(host.target("gameFramework.j.ae"));
         Method resetNetwork = networkClass.getDeclaredMethod("a", boolean.class);
         networkCapHook = host.hookExecutable(resetNetwork, chain -> {
@@ -401,7 +338,6 @@ public final class RoomOptions {
             return result;
         });
 
-        // game.i copies the network cap into the live game's by/bz fields.
         Class<?> gameClass = loader.loadClass(host.target("game.i"));
         Method startGame = gameClass.getDeclaredMethod(
                 "a", boolean.class, boolean.class, int.class);
@@ -488,8 +424,6 @@ public final class RoomOptions {
             String message = "此服务器已禁用以下单位：" + bannedUnitDisplayText(banned);
             Method send = host.findCompatibleMethod(network.getClass(), "k", String.class);
             if (send == null) throw new NoSuchMethodException("找不到网络聊天广播方法");
-            // ae.k(String) broadcasts to the local host and every connected client.
-            // ae.k(String) 会同时发送给房主本地和所有已连接玩家。
             send.invoke(network, message);
         } catch (Throwable t) {
             synchronized (banStartBroadcastGames) {
@@ -520,10 +454,6 @@ public final class RoomOptions {
             if (send == null) throw new NoSuchMethodException("找不到网络系统消息发送方法");
             String cooldownKey = normalizeUnitNameForCooldown(unitName);
             if (!tryAcquireBanMessageCooldown(cooldownKey)) return;
-            // ae.a() prepends the generic "desync:" text. Sending through the
-            // host's normal broadcast path lets vanilla clients receive the exact
-            // replacement without requiring a module-side UI hook.
-            // 通过房主原生广播路径发送。
             try {
                 send.invoke(network, "desync：此服务器已禁用" + unitName);
             } catch (Throwable t) {
@@ -597,10 +527,6 @@ public final class RoomOptions {
         return state;
     }
 
-    /**
-     * 写入原版已有的房间设置字段和同步包字段，并在房主本地执行 Ban 校验。
-     * 不新增网络包格式，因此原版客户端仍可接收原版设置。
-     */
     public void apply(Object network,
                       int maxPlayers,
                       int unitCap,
@@ -652,8 +578,6 @@ public final class RoomOptions {
             }
         }
 
-        // 没有选择 Ban 单位时不安装命令/生产队列 Hook；选择后才加载权威拦截器。
-        // Do not install command/queue hooks for an empty Ban set; load them only when needed.
         Set<String> parsedBannedUnits = Collections.unmodifiableSet(parseBannedUnits(bannedText));
         if (!parsedBannedUnits.isEmpty()) {
             ensureBanHooksInstalled();
@@ -669,10 +593,6 @@ public final class RoomOptions {
         host.findField(settings.getClass(), "i").setBoolean(settings, noNukes);
         host.findField(settings.getClass(), "l").setBoolean(settings, sharedControl);
 
-        // ae.a(boolean) 在开始游戏时会重新从 SettingsEngine 读取单位上限。
-        // ae.a(boolean) reloads the cap from SettingsEngine when a game starts.
-        // 只改 ae.ay/az 会被它覆盖，所以这里同时更新真正的源字段。
-        // Updating only ae.ay/az would be overwritten, so update the source field too.
         Object engine = host.findEngine(loader);
         Object settingsEngine = host.findField(engine.getClass(), "bN").get(engine);
         host.findField(settingsEngine.getClass(), "teamUnitCapHostedGame")
@@ -695,8 +615,6 @@ public final class RoomOptions {
             setLayout.invoke(network, values[teamLayout]);
         }
 
-        // 与原版 fv.onClick 相同：发送已有的房间设置包，并刷新房间列表信息。
-        // Match fv.onClick: use existing packets and refresh public room metadata.
         Method sendUpdate = host.findCompatibleMethod(network.getClass(), "b");
         if (sendUpdate != null) sendUpdate.invoke(network);
         Method updateTimer = host.findCompatibleMethod(network.getClass(), "p");
@@ -741,8 +659,6 @@ public final class RoomOptions {
             if (network == null || !isHostNetwork(network)) return;
             host.findField(game.getClass(), "by").setInt(game, activeUnitCap);
             host.findField(game.getClass(), "bz").setInt(game, activeUnitCap);
-            // game.i.a() initializes team counters before it copies the network cap.
-            // Refresh the authoritative per-team counters after the live cap is fixed.
             Class<?> teams = loader.loadClass(host.target("game.p"));
             Method refreshTeams = host.findCompatibleMethod(teams, "M");
             if (refreshTeams != null) refreshTeams.invoke(null);
@@ -799,8 +715,6 @@ public final class RoomOptions {
     private ArrayList<UnitOption> loadAvailableUnits() {
         LinkedHashMap<String, UnitOption> byId = new LinkedHashMap<>();
         try {
-            // “All”页正是从 cj.ae 读取并按 ab 排序后筛选。
-            // “All” page reads cj.ae, applies this filter, then sorts with ab.
             Class<?> registryClass = loader.loadClass(host.target("game.units.cj"));
             Class<?> typeClass = loader.loadClass(host.target("game.units.el"));
             Class<?> ceClass = loader.loadClass(host.target("game.units.ce"));
@@ -841,8 +755,6 @@ public final class RoomOptions {
                 Object comparator = constructor.newInstance();
                 Collections.sort((ArrayList) editorTypes, (Comparator) comparator);
             } catch (Throwable sortError) {
-                // 老版本可能没有可反射的包级 comparator，名称排序仍保持稳定可用。
-                // Older ports may hide the package-private comparator; keep a stable name order.
                 Collections.sort((ArrayList) editorTypes, (left, right) -> {
                     String leftName = readUnitName(left);
                     String rightName = readUnitName(right);
@@ -904,8 +816,6 @@ public final class RoomOptions {
             if (label.isEmpty()) label = id;
             byId.put(key, new UnitOption(id, label));
         } catch (Throwable ignored) {
-            // 单个单位缺少可显示信息时跳过，不影响其他单位加载。
-            // Skip one malformed unit without preventing the rest from loading.
         }
     }
 
@@ -1012,14 +922,6 @@ public final class RoomOptions {
         return fallback;
     }
 
-    /**
-     * 检查最终命令中的建造订单和生产动作。
-     * Check both the final build order and the production action in a command.
-     *
-     * <p>这里不再读取 currentNetwork()，也不在每个命令上查找 Field/Method。
-     * activeBannedUnits 为空时只做一次 volatile 读取就返回，避免未启用时拖慢正常对局。</p>
-     * No network lookup or reflective member search is performed on the hot path.
-     */
     private String bannedUnitNameInCommand(Object command) {
         Set<String> banned = activeBannedUnits;
         BanReflection reflection = banReflection;
@@ -1036,9 +938,6 @@ public final class RoomOptions {
                 }
             }
 
-            // 生产命令使用 e.k 动作 ID，而不是 e.j 建造订单。e.i() 在调用者
-            // 填充 e.k 之前执行，因此必须在最终执行点 h() 检查这一分支。
-            // Production commands use e.k, and e.i() runs before callers fill e.k.
             Object actionId = reflection.commandAction.get(command);
             if (actionId == null) return null;
             Object selectedUnits = reflection.commandUnits.get(command);
@@ -1048,11 +947,6 @@ public final class RoomOptions {
                 if (name != null) return name;
             }
 
-            // Remote packet 20 has not called e.j() yet. Its selected units are
-            // still stored as Long IDs in e.A, while e.w is empty. Resolving those
-            // IDs here fixes the multiplayer bypass at the server validation point.
-            // 远程 packet 20 尚未调用 e.j()，选中单位仍以 Long ID 存在 e.A，e.w 此时为空。
-            // 在服务器校验点解析这些 ID，修复多人模式绕过 Ban 的问题。
             Object selectedIds = reflection.commandSelectedIds.get(command);
             if (selectedIds instanceof Iterable) {
                 for (Object selectedId : (Iterable<?>) selectedIds) {
@@ -1067,8 +961,6 @@ public final class RoomOptions {
             }
             return null;
         } catch (Throwable t) {
-            // 反射结构不匹配时只关闭 Ban 校验，不影响原版命令处理。
-            // Disable only the optional Ban check on a reflection mismatch.
             return null;
         }
     }
@@ -1104,8 +996,6 @@ public final class RoomOptions {
         if (rawId == null) return null;
         String id = String.valueOf(rawId).trim();
         if (id.isEmpty()) return null;
-        // 原生单位 ID 本身都是小写；只有首个精确查询失败时才创建小写副本。
-        // Native IDs are lowercase; allocate a normalized copy only on a miss.
         if (!banned.contains(id) && !banned.contains(normalizeUnitId(id))) return null;
         if (reflection.unitName != null) {
             Object rawName = reflection.unitName.invoke(unitType);

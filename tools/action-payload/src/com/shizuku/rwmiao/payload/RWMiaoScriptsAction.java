@@ -6,7 +6,6 @@ import com.corrodinggames.rts.game.units.a.u;
 import com.corrodinggames.rts.game.units.ce;
 import com.corrodinggames.rts.game.units.el;
 
-/** Opens the module-owned applicable-script selector for selected units. */
 public final class RWMiaoScriptsAction extends s {
     public static RWMiaoScriptsAction INST = new RWMiaoScriptsAction();
     public RWMiaoScriptsAction() { super("c__cut_rwmiao_scripts"); }

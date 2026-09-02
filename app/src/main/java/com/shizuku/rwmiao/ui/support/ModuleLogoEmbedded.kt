@@ -5,8 +5,6 @@ import android.util.Base64
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 
-// Embedded fallback for the injected game process. It avoids relying on the
-// host application's resource table when the module header is first composed.
 private val BODY_PNG =
     "iVBORw0KGgoAAAANSUhEUgAAAaIAAAFqCAYAAABYsF62AAAm0ElEQVR4Ae3BX4hliYHf9+/vzFVbbUfdx8lDpJf0XVaQGAx9BhIQuJ06IgQ25KGviBJ5g/Hc" +
     "Zge8ebC7xiY4zmbpW0xQvISkS7Iha0brqjKLlCGYrmFt4gRMV2sH1oGQuUUcQshK6oLEqzwE3epJPMpIs7/c3Z6dmdZ03/p37q17zvl9PiJiBWzXwH2gAmbA" +

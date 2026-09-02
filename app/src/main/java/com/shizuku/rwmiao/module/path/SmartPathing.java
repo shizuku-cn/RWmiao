@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,7 +31,6 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_SMART_PATHING;
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_SMART_PATHING_THRESHOLD;
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_SHOW_SMART_PATH_ACTION;
 
-/** Asynchronous smart routing for native move, attack and build orders. */
 final class SmartPathing {
     private static final String TAG = "RWmiao";
     private static final int GRID_CACHE_TICKS = 30;
@@ -56,8 +56,9 @@ final class SmartPathing {
     private final Map<Object, CachedGrid> gridCache = new WeakHashMap<>();
     private final Set<Object> inspectedCommands = Collections.newSetFromMap(new WeakHashMap<>());
     private final Set<Object> generatedCommands = Collections.newSetFromMap(new WeakHashMap<>());
-    private final Set<Object> manualEnabled = Collections.newSetFromMap(new WeakHashMap<>());
-    private final Set<Object> manualDisabled = Collections.newSetFromMap(new WeakHashMap<>());
+    private final Set<Long> manualEnabled = new HashSet<>();
+    private final Set<Long> manualDisabled = new HashSet<>();
+    private final SimulationLifecycle simulationLifecycle = new SimulationLifecycle();
     private volatile Boolean enabledState;
     private volatile Boolean showActionState;
     private volatile Integer thresholdState;
@@ -100,7 +101,6 @@ final class SmartPathing {
             return result;
         }));
         ensureTickHooks();
-        host.log(4, TAG, "Smart pathing hooks installed");
     }
 
     private synchronized void ensureTickHooks() {
@@ -140,6 +140,14 @@ final class SmartPathing {
     private GameTickDispatcher.Registration hookQueueTick(Method tick) {
         return host.tickDispatcher().register(tick, queue -> {
             try {
+                Object engine = host.findEngine(loader);
+                SimulationLifecycle.Observation lifecycle = simulationLifecycle.observe(
+                        currentTick(engine), host.completedResyncGeneration());
+                if (lifecycle == SimulationLifecycle.Observation.RESYNC) {
+                    invalidateWorldState(false);
+                } else if (lifecycle == SimulationLifecycle.Observation.NEW_MATCH) {
+                    invalidateWorldState(true);
+                }
                 flushPendingMove();
                 flushStagedRoutes(queue);
                 drainReady();
@@ -168,13 +176,6 @@ final class SmartPathing {
                 token, currentTick(engine), targetX, targetY, active);
         pendingMove = move;
 
-        /*
-         * Multiplayer can stop advancing the simulation tick while an unreachable native
-         * command is still being prepared for network transmission. Waiting two ticks in
-         * that state leaves the optimized route at its first segment, or prevents it from
-         * being submitted at all. Capture and submit immediately. The original command is
-         * retained as a fail-safe until the computed replacement is ready.
-         */
         if (isMultiplayer(engine)) {
             List<UnitRequest> requests = captureRequests(
                     engine, move.units, targetX, targetY, null, token);
@@ -258,7 +259,8 @@ final class SmartPathing {
             }
             for (ArrayList<UnitRequest> group : groups.values()) {
                 UnitRequest first = group.get(0);
-                if (group.size() >= 4 && !constrainedTarget(first)) {
+                if (group.size() >= 4 && !constrainedTarget(first)
+                        && !isDirectAction(first)) {
                     ArrayList<FlowFieldPathfinder.Input> inputs = new ArrayList<>();
                     for (UnitRequest request : group) {
                         inputs.add(new FlowFieldPathfinder.Input(
@@ -295,7 +297,12 @@ final class SmartPathing {
     private void submitIndividual(List<UnitRequest> group) {
         for (UnitRequest request : group) {
             if (!tokenCurrent(request.unitId, request.token)) continue;
-            List<PointF> route = pathfinder.find(request.grid,
+            List<PointF> route = isDirectAction(request)
+                    ? pathfinder.findActionApproach(request.grid,
+                    request.startX, request.startY, request.targetX, request.targetY,
+                    request.targetRadius,
+                    () -> !tokenCurrent(request.unitId, request.token))
+                    : pathfinder.find(request.grid,
                     request.startX, request.startY, request.targetX, request.targetY,
                     () -> !tokenCurrent(request.unitId, request.token));
             if ((!route.isEmpty() || request.terminal != null)
@@ -303,6 +310,12 @@ final class SmartPathing {
                 ready.add(new PathResult(request, route));
             }
         }
+    }
+
+    private boolean isDirectAction(UnitRequest request) {
+        return request.terminal != null
+                && ("attack".equals(request.terminal.type)
+                || "build".equals(request.terminal.type));
     }
 
     private boolean constrainedTarget(UnitRequest request) {
@@ -341,7 +354,6 @@ final class SmartPathing {
         return false;
     }
 
-    /** Results are applied only from the native game-command tick. */
     private void drainReady() throws Throwable {
         boolean multiplayer = isMultiplayer(host.findEngine(loader));
         PathResult result;
@@ -380,13 +392,6 @@ final class SmartPathing {
         }
     }
 
-    /**
-     * In multiplayer the first replace command performs asynchronous native path preparation,
-     * while append commands are immediately network-ready. Sending all commands together lets
-     * the append commands overtake the first one; when the first finally arrives it clears the
-     * queue and only one segment remains. Emit every later segment only after its predecessor
-     * leaves the outgoing/ready network queues.
-     */
     private void flushStagedRoutes(Object queue) throws Throwable {
         synchronized (stagedRoutes) {
             if (stagedRoutes.isEmpty()) return;
@@ -430,7 +435,6 @@ final class SmartPathing {
         return false;
     }
 
-    /** Keep exact clicks in open ground; near blocked cells use the native cell centre. */
     private List<PointF> normalizeMultiplayerEndpoint(UnitRequest request,
                                                        List<PointF> route) {
         if (route.isEmpty()) return route;
@@ -449,31 +453,41 @@ final class SmartPathing {
         return safe;
     }
 
-    /** Keep only the route prefix before the first point with a clear final approach. */
     private List<PointF> terminalApproach(UnitRequest request, List<PointF> route) {
         if (route.isEmpty()) return route;
         float targetX = request.terminal.x;
         float targetY = request.terminal.y;
+        float targetRadius = request.targetRadius;
         if ("attack".equals(request.terminal.type) && request.terminal.target != null) {
             try {
                 targetX = host.number(host.findFieldValue(request.terminal.target, "eq"));
                 targetY = host.number(host.findFieldValue(request.terminal.target, "er"));
+                targetRadius = Math.max(0.0f,
+                        host.number(host.findFieldValue(request.terminal.target, "cl")));
             } catch (Throwable ignored) {
             }
         }
-        if (request.grid.lineOfSightToTarget(
-                request.startX, request.startY, targetX, targetY)) {
+        if (clearTerminalApproach(request, request.startX, request.startY,
+                targetX, targetY, targetRadius)) {
             return Collections.emptyList();
         }
         for (int i = 0; i < route.size(); i++) {
             PointF point = route.get(i);
-            if (request.grid.lineOfSightToTarget(point.x, point.y, targetX, targetY)) {
+            if (clearTerminalApproach(request, point.x, point.y,
+                    targetX, targetY, targetRadius)) {
                 return new ArrayList<>(route.subList(0, i + 1));
             }
         }
-        return route.size() > 1
-                ? new ArrayList<>(route.subList(0, route.size() - 1))
-                : Collections.emptyList();
+        return route;
+    }
+
+    private boolean clearTerminalApproach(UnitRequest request, float x, float y,
+                                          float targetX, float targetY,
+                                          float targetRadius) {
+        return "attack".equals(request.terminal.type)
+                ? request.grid.lineOfSightToTargetFootprint(
+                x, y, targetX, targetY, targetRadius)
+                : request.grid.lineOfSightToTarget(x, y, targetX, targetY);
     }
 
     private Object issueTerminal(Object unit, TerminalSpec terminal, boolean append)
@@ -509,6 +523,15 @@ final class SmartPathing {
         sorted.sort(Comparator.comparingLong(this::unitId));
         IdentityHashMap<Object, SmartPathGrid> requestGrids = new IdentityHashMap<>();
         ArrayList<UnitRequest> result = new ArrayList<>();
+        float targetRadius = 0.0f;
+        if (terminal != null && "attack".equals(terminal.type)
+                && terminal.target != null) {
+            try {
+                targetRadius = Math.max(0.0f,
+                        host.number(host.findFieldValue(terminal.target, "cl")));
+            } catch (Throwable ignored) {
+            }
+        }
         for (Object unit : sorted) {
             long id = unitId(unit);
             if (!tokenCurrent(id, token)) continue;
@@ -525,12 +548,11 @@ final class SmartPathing {
                     host.number(host.findFieldValue(unit, "eq")),
                     host.number(host.findFieldValue(unit, "er")),
                     Math.max(1.0f, host.number(host.findFieldValue(unit, "cl"))),
-                    targetX, targetY, grid, terminal));
+                    targetX, targetY, targetRadius, grid, terminal));
         }
         return result;
     }
 
-    /** Cache one immutable native-grid snapshot per movement layer. */
     private SmartPathGrid cachedGrid(Object layer, float scale, int tick) throws Throwable {
         if (layer == null) return null;
         synchronized (gridCache) {
@@ -655,20 +677,46 @@ final class SmartPathing {
             boolean disable = allSmartEnabled(selected);
             synchronized (manualEnabled) {
                 for (Object unit : selected) {
+                    long id = unitId(unit);
                     if (disable) {
-                        manualEnabled.remove(unit);
-                        manualDisabled.add(unit);
+                        manualEnabled.remove(id);
+                        manualDisabled.add(id);
                     } else {
-                        manualDisabled.remove(unit);
-                        manualEnabled.add(unit);
+                        manualDisabled.remove(id);
+                        manualEnabled.add(id);
                     }
-                    unitTokens.put(unitId(unit), nextToken.incrementAndGet());
+                    unitTokens.put(id, nextToken.incrementAndGet());
                 }
             }
             if (runtimeAvailable()) ensureHooks();
             else disableHooks();
         } catch (Throwable t) {
             host.log(5, TAG, "Failed to toggle smart path selection", t);
+        }
+    }
+
+    void setSelected(boolean enable) {
+        try {
+            ArrayList<Object> selected = selectedOwnUnits(host.findEngine(loader));
+            if (selected.isEmpty()) return;
+            synchronized (manualEnabled) {
+                for (Object unit : selected) {
+                    if (unitSmartEnabled(unit) == enable) continue;
+                    long id = unitId(unit);
+                    if (enable) {
+                        manualDisabled.remove(id);
+                        manualEnabled.add(id);
+                    } else {
+                        manualEnabled.remove(id);
+                        manualDisabled.add(id);
+                    }
+                    unitTokens.put(id, nextToken.incrementAndGet());
+                }
+            }
+            if (runtimeAvailable()) ensureHooks();
+            else disableHooks();
+        } catch (Throwable t) {
+            host.log(5, TAG, "Failed to set smart path selection", t);
         }
     }
 
@@ -685,9 +733,10 @@ final class SmartPathing {
 
     private boolean unitSmartEnabled(Object unit) {
         if (!showAction()) return enabled();
+        long id = unitId(unit);
         synchronized (manualEnabled) {
-            if (manualDisabled.contains(unit)) return false;
-            if (manualEnabled.contains(unit)) return true;
+            if (manualDisabled.contains(id)) return false;
+            if (manualEnabled.contains(id)) return true;
         }
         return enabled();
     }
@@ -750,6 +799,23 @@ final class SmartPathing {
     private boolean tokenCurrent(long unitId, long token) {
         Long current = unitTokens.get(unitId);
         return current != null && current == token;
+    }
+
+    private void invalidateWorldState(boolean clearManualChoices) {
+        nextToken.incrementAndGet();
+        unitTokens.clear();
+        pendingMove = null;
+        ready.clear();
+        synchronized (stagedRoutes) { stagedRoutes.clear(); }
+        synchronized (gridCache) { gridCache.clear(); }
+        synchronized (inspectedCommands) { inspectedCommands.clear(); }
+        synchronized (generatedCommands) { generatedCommands.clear(); }
+        if (clearManualChoices) {
+            synchronized (manualEnabled) {
+                manualEnabled.clear();
+                manualDisabled.clear();
+            }
+        }
     }
 
     private String enumName(Object value) {
@@ -829,12 +895,13 @@ final class SmartPathing {
         final float radius;
         final float targetX;
         final float targetY;
+        final float targetRadius;
         final SmartPathGrid grid;
         final TerminalSpec terminal;
 
         UnitRequest(Object unit, long unitId, long token,
                     float startX, float startY, float radius,
-                    float targetX, float targetY,
+                    float targetX, float targetY, float targetRadius,
                     SmartPathGrid grid, TerminalSpec terminal) {
             this.unit = unit;
             this.unitId = unitId;
@@ -844,6 +911,7 @@ final class SmartPathing {
             this.radius = radius;
             this.targetX = targetX;
             this.targetY = targetY;
+            this.targetRadius = targetRadius;
             this.grid = grid;
             this.terminal = terminal;
         }

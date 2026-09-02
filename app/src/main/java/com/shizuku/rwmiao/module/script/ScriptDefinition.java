@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-/** Metadata registered by executable Lua through rw.script{...}. */
 public final class ScriptDefinition {
     private static final Set<String> ALLOWED_DATA = new LinkedHashSet<>();
     static { Collections.addAll(ALLOWED_DATA,"identity","team","position","health","movement","combat","weapons","orders","pathing","transport","build","production","actions","abilities","damage","selection","map","resources","projectiles","environment","catalog","all"); }
@@ -15,6 +14,8 @@ public final class ScriptDefinition {
     public final String id;
     public final String name;
     public final List<String> unitTypes;
+    private final Set<String> acceptedUnitTypes;
+    private final boolean acceptsAllUnits;
     public final Set<String> dataGroups;
     public final List<ScriptSetting> settings;
     public final String sourceName;
@@ -33,6 +34,9 @@ public final class ScriptDefinition {
         this.id = id;
         this.name = name == null || name.trim().isEmpty() ? id : name.trim();
         this.unitTypes = Collections.unmodifiableList(normalized);
+        LinkedHashSet<String> acceptedTypes=new LinkedHashSet<>(normalized);
+        this.acceptsAllUnits=acceptedTypes.contains("All")||acceptedTypes.contains("*");
+        this.acceptedUnitTypes=Collections.unmodifiableSet(acceptedTypes);
         LinkedHashSet<String> requested = new LinkedHashSet<>();
         if (dataGroups != null) for (String group : dataGroups)
             if (group != null && !group.trim().isEmpty()) {
@@ -40,7 +44,7 @@ public final class ScriptDefinition {
                 if(!ALLOWED_DATA.contains(normalizedGroup))throw new IOException("未知 data 分组: "+group);
                 requested.add(normalizedGroup);
             }
-        if (requested.isEmpty()) requested.add("all");
+        if (requested.isEmpty()) requested.add("identity");
         this.dataGroups = Collections.unmodifiableSet(requested);
         if(settings==null)settings=Collections.emptyList();
         if(settings.size()>32)throw new IOException("设置项不能超过 32 个");
@@ -51,14 +55,6 @@ public final class ScriptDefinition {
     }
 
     public boolean acceptsUnit(String typeId, String typeName) {
-        for (String value : unitTypes) {
-            // Unit IDs are identifiers, not display text: exact, case-sensitive matching only.
-            if ("*".equals(value) || "All".equals(value) || equalsType(value, typeId)) return true;
-        }
-        return false;
-    }
-
-    private static boolean equalsType(String a, String b) {
-        return a != null && b != null && a.equals(b);
+        return acceptsAllUnits || typeId != null && acceptedUnitTypes.contains(typeId);
     }
 }

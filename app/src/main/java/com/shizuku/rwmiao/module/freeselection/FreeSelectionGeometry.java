@@ -1,13 +1,11 @@
 package com.shizuku.rwmiao.module.freeselection;
 
-/** Allocation-free geometry helpers for free-form selection and offline tests. */
 public final class FreeSelectionGeometry {
     private static final double EPSILON = 0.0001d;
 
     private FreeSelectionGeometry() {
     }
 
-    /** Even-odd containment with points on an edge included. */
     public static boolean contains(float[] xs, float[] ys, int count, float x, float y) {
         if (xs == null || ys == null || count < 3 || count > xs.length || count > ys.length) {
             return false;
@@ -38,7 +36,6 @@ public final class FreeSelectionGeometry {
         return length;
     }
 
-    /** Signed shoelace area, returned as an absolute value. */
     public static float area(float[] xs, float[] ys, int count) {
         if (xs == null || ys == null || count < 3) return 0.0f;
         double twice = 0.0d;
@@ -49,10 +46,6 @@ public final class FreeSelectionGeometry {
         return (float) (Math.abs(twice) * 0.5d);
     }
 
-    /**
-     * Closure validation. The fan fallback prevents a symmetric bow-tie from
-     * being rejected solely because its signed shoelace terms cancel out.
-     */
     public static boolean isClosed(float[] xs, float[] ys, int count,
                                    float closeDistance, int minimumPoints,
                                    float minimumPerimeter, float minimumArea) {

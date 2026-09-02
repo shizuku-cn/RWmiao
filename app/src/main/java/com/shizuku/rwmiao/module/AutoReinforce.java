@@ -35,10 +35,6 @@ import com.shizuku.rwmiao.ui.support.RuntimePanels;
 
 import static com.shizuku.rwmiao.config.SettingsContract.*;
 
-/**
- * 自动补兵主协调器：负责动作捕获、序列状态、面板和原生同步指令。
- * Main reinforcement coordinator: captures actions, owns queue state/UI, and sends native synchronized orders.
- */
 final class AutoReinforce {
     private static final String TAG = "RWmiao";
     private static final String BLOCKED_POPUP_KEY = "__rwmiao_blocked__";
@@ -70,7 +66,7 @@ final class AutoReinforce {
     private volatile boolean updatingLabel;
     private volatile int popupSeenTick = -1;
     private volatile int lastTick;
-    private volatile int lastMatchTick = -1;
+    private final SimulationLifecycle simulationLifecycle = new SimulationLifecycle();
     private volatile int lastPreviewTick = Integer.MIN_VALUE;
     private volatile long blockedMessageUntilMs;
     private volatile long blockedPopupUntilMs;
@@ -125,7 +121,6 @@ final class AutoReinforce {
                             || !isProductionAction(type, group)) continue;
                     rememberEntry(type, group, actionTitle(action), actionSpec(action));
                 } catch (Throwable ignoredAction) {
-                    // Ignore non-production actions.
                 }
             }
         }
@@ -215,7 +210,6 @@ final class AutoReinforce {
         if (isRallyOrBuildAction(action)) return;
         Object type = host.findField(action.getClass(), "j").get(action);
         if (type == null) return;
-        // Action execution can occur in the same tick as a selection change.
         selectedCacheTick = Integer.MIN_VALUE;
         Set<Long> group = snapshotSelectedGroup();
         if (group.isEmpty() || selectedGroupCanBuild(group)
@@ -304,7 +298,6 @@ final class AutoReinforce {
         return false;
     }
 
-    /** Shows the conflict inside the same editor PopupWindow, not as a toast. */
     private void showBlockedMessage() {
         long now = System.currentTimeMillis();
         if (now < blockedMessageUntilMs) return;
@@ -368,6 +361,7 @@ final class AutoReinforce {
             if (all instanceof Iterable) {
                 for (Object unit : (Iterable<?>) all) {
                     if (unit != null && building.isInstance(unit)
+                            && isFactoryAlive(unit)
                             && host.boolField(unit, "cI")) {
                         ids.add(unitId(unit));
                         factories.add(unit);
@@ -395,6 +389,7 @@ final class AutoReinforce {
         }
         for (Object candidate : factories) {
             if (candidate == null || !group.contains(unitId(candidate))
+                    || !isFactoryAlive(candidate)
                     || host.findFieldValue(candidate, "bZ") != me) continue;
             Method method = host.findCompatibleMethod(candidate.getClass(), "a", actionType.getClass());
             if (method != null && method.invoke(candidate, actionType) != null) return true;
@@ -402,11 +397,6 @@ final class AutoReinforce {
         return false;
     }
 
-    /**
-     * Producers may be mobile (carrier/flying fortress), so movement or building class is not
-     * a valid discriminator. Builders expose place/reclaim actions through their unit type;
-     * pure producers expose queue actions but no builder action.
-     */
     private boolean selectedGroupCanBuild(Set<Long> group) {
         refreshSelectedFactoryCache();
         ArrayList<Object> selected;
@@ -415,7 +405,7 @@ final class AutoReinforce {
         }
         for (Object unit : selected) {
             try {
-                if (unit == null || !group.contains(unitId(unit))) continue;
+                if (unit == null || !group.contains(unitId(unit)) || !isFactoryAlive(unit)) continue;
                 Method unitTypeMethod = host.findNoArgMethod(unit.getClass(), "q");
                 Object unitType = unitTypeMethod == null ? null : unitTypeMethod.invoke(unit);
                 if (unitType == null) continue;
@@ -432,8 +422,6 @@ final class AutoReinforce {
                     }
                 }
             } catch (Throwable ignored) {
-                // Unknown unit implementations remain eligible only when their clicked action
-                // itself passes the production-action check below.
             }
         }
         return false;
@@ -447,6 +435,19 @@ final class AutoReinforce {
     private long unitId(Object unit) throws Throwable {
         Object value = host.findField(unit.getClass(), "ej").get(unit);
         return value instanceof Number ? ((Number) value).longValue() : Long.MIN_VALUE;
+    }
+
+    private boolean isFactoryAlive(Object unit) {
+        if (unit == null) return false;
+        try {
+            if (host.boolField(unit, "bX")) return false;
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (host.boolField(unit, "el")) return false;
+        } catch (Throwable ignored) {
+        }
+        return true;
     }
 
     private String typeId(Object type) {
@@ -553,8 +554,6 @@ final class AutoReinforce {
             created.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             created.setFocusable(true);
             created.setOutsideTouchable(false);
-            // Keep the editor focusable for IME, but do not make the whole
-            // game window modal while this small popup is visible.
             created.setTouchModal(false);
             created.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
             created.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
@@ -878,11 +877,6 @@ final class AutoReinforce {
         return result;
     }
 
-    /**
-     * 相邻的同一队列合并为一个 chip，尤其避免无限队列把整行渲染成重复的绿色按钮。
-     * Merge adjacent emissions from one queue into a chip, preventing an infinite queue
-     * from rendering an entire row as repeated green buttons.
-     */
     private void appendPreviewToken(ArrayList<PreviewToken> result, ReinforceEntry entry,
                                      int count, boolean infinite) {
         if (entry == null) return;
@@ -971,21 +965,59 @@ final class AutoReinforce {
     }
 
     private void runAutomaticReinforcement() throws Throwable {
-        if (!hasActivePlans()) return;
         int tick = currentTick();
         if (weightMode()) {
             if (tick - lastTick < 6) return;
             lastTick = tick;
+            pruneDeadFactoryGroups();
+            if (!hasActivePlans()) return;
             runWeighted();
         } else {
             if (tick - lastTick < 30) return;
             lastTick = tick;
+            pruneDeadFactoryGroups();
+            if (!hasActivePlans()) return;
             normalizeUnweightedInfinite();
             runUnweighted();
         }
     }
 
-    /** Render unit previews through the game's off-screen renderer. */
+    private void pruneDeadFactoryGroups() throws Throwable {
+        Class<?> factory = loader.loadClass(host.target("game.units.d.s"));
+        Object all = allUnits();
+        if (!(all instanceof Iterable)) return;
+        Set<Long> aliveFactoryIds = new HashSet<>();
+        for (Object unit : (Iterable<?>) all) {
+            if (unit == null || !factory.isInstance(unit) || !isFactoryAlive(unit)) continue;
+            long id = unitId(unit);
+            if (id != Long.MIN_VALUE) aliveFactoryIds.add(id);
+        }
+        synchronized (entries) {
+            for (QueuePlan plan : new ArrayList<>(plans.values())) {
+                plan.groupIds.retainAll(aliveFactoryIds);
+                for (String key : new ArrayList<>(plan.sequence)) {
+                    ReinforceEntry entry = entries.get(key);
+                    if (entry == null) {
+                        plan.sequence.remove(key);
+                        continue;
+                    }
+                    entry.groupIds.retainAll(aliveFactoryIds);
+                    if (entry.groupIds.isEmpty()) {
+                        plan.sequence.remove(key);
+                        entries.remove(key);
+                        targets.remove(key);
+                        weights.remove(key);
+                        produced.remove(key);
+                        previewRetryTicks.remove(key);
+                    }
+                }
+                if (plan.groupIds.isEmpty() || plan.sequence.isEmpty()) {
+                    plans.remove(plan.id);
+                }
+            }
+        }
+    }
+
     private void renderPendingPreviews() {
         if (listDialog == null) return;
         int tick = currentTick();
@@ -1010,8 +1042,6 @@ final class AutoReinforce {
             } else if (tick >= 0) {
                 previewRetryTicks.put(entry.typeId, tick + 30);
             }
-            // Render at most one missing icon per game tick so the panel does
-            // not block the game thread while rows are being populated.
             break;
         }
     }
@@ -1083,11 +1113,6 @@ final class AutoReinforce {
         return null;
     }
 
-    /**
-     * Unweighted mode keeps each factory group as an independent sequence,
-     * while the groups themselves get a round-robin turn.  A finite item is
-     * always handled before the group's infinite tail.
-     */
     private void runUnweighted() throws Throwable {
         ArrayList<QueuePlan> activePlans = new ArrayList<>();
         for (QueuePlan plan : plans.values()) {
@@ -1100,25 +1125,21 @@ final class AutoReinforce {
             int index = (start + offset) % size;
             QueuePlan plan = activePlans.get(index);
             ReinforceEntry entry = firstSequentialEntry(plan);
-            if (entry == null || !hasFreeFactory(entry)) continue;
-            if (issueProduce(entry, 1) <= 0) continue;
-            consumeOne(entry.key);
+            if (entry == null) continue;
+            int amount = issueAmount(entry);
+            if (amount <= 0) continue;
+            int issued = issueProduce(entry, amount);
+            if (issued <= 0) continue;
+            consume(entry.key, issued);
             roundRobinPlanIndex = (index + 1) % size;
             return;
         }
     }
 
-    /**
-     * 正权重队列共享一个跨工厂组的权重周期；权重 0 独立运行，不暂停也不稀释正权重队列。
-     * Positive queues share one weighted cycle across factory groups; weight zero stays
-     * independent and never pauses or dilutes that positive-weight cycle.
-     */
     private void runWeighted() throws Throwable {
         ArrayList<QueuePlan> allPlans = new ArrayList<>(plans.values());
         if (allPlans.isEmpty()) return;
 
-        // Weight-zero queues are independent from the positive-weight cycle.
-        // Let each eligible group submit one native order this tick.
         for (QueuePlan plan : allPlans) {
             ReinforceEntry zero = firstWeightZeroEntry(plan);
             if (zero == null || !hasFreeFactory(zero)) continue;
@@ -1158,7 +1179,6 @@ final class AutoReinforce {
         return null;
     }
 
-    /** Selects the next positive queue across all groups in sequence order. */
     private ReinforceEntry chooseGlobalWeightedEntry() {
         ArrayList<ReinforceEntry> candidates = positiveEntries();
         if (candidates.isEmpty()) return null;
@@ -1178,7 +1198,6 @@ final class AutoReinforce {
         return null;
     }
 
-    /** Same selection as the scheduler, without changing the cycle cursor. */
     private ReinforceEntry peekGlobalWeightedEntry() {
         ArrayList<ReinforceEntry> candidates = positiveEntries();
         if (candidates.isEmpty()) return null;
@@ -1204,12 +1223,17 @@ final class AutoReinforce {
         return result;
     }
 
-    private void consumeOne(String key) {
+    private void consume(String key, int amount) {
+        if (amount <= 0) return;
         int current = target(key);
         if (current > 0) {
-            targets.put(key, Math.max(0, current - 1));
+            targets.put(key, Math.max(0, current - amount));
             if (target(key) == 0) produced.remove(key);
         }
+    }
+
+    private void consumeOne(String key) {
+        consume(key, 1);
     }
 
     private int producedValue(String key) {
@@ -1221,6 +1245,13 @@ final class AutoReinforce {
         return freeSlots(entry) > 0;
     }
 
+    private int issueAmount(ReinforceEntry entry) throws Throwable {
+        int free = freeSlots(entry);
+        if (free <= 0) return 0;
+        int remaining = target(entry.key);
+        return remaining > 0 ? Math.min(free, remaining) : free;
+    }
+
     private int freeSlots(ReinforceEntry entry) throws Throwable {
         Object engine = host.findEngine(loader);
         Object me = host.findField(engine.getClass(), "bp").get(engine);
@@ -1230,7 +1261,7 @@ final class AutoReinforce {
         if (!(all instanceof Iterable)) return 0;
         for (Object unit : (Iterable<?>) all) {
             if (unit == null || !factory.isInstance(unit) || !entry.groupIds.contains(unitId(unit))
-                    || host.findFieldValue(unit, "bZ") != me) continue;
+                    || !isFactoryAlive(unit) || host.findFieldValue(unit, "bZ") != me) continue;
             Method queueCount = host.findNoArgMethod(unit.getClass(), "cW");
             int queued = queueCount == null ? 0 : ((Number) queueCount.invoke(unit)).intValue();
             free += Math.max(1 - queued, 0);
@@ -1238,11 +1269,6 @@ final class AutoReinforce {
         return free;
     }
 
-    /**
-     * 生产指令始终走游戏原生 command 对象，避免直接改本地队列破坏多人同步。
-     * Production orders always use the game's native command object instead of mutating
-     * a local queue, preserving multiplayer synchronization.
-     */
     private int issueProduce(ReinforceEntry entry, int amount) throws Throwable {
         if (amount <= 0 || entry.actionType == null) return 0;
         Object engine = host.findEngine(loader);
@@ -1261,7 +1287,8 @@ final class AutoReinforce {
         if (all instanceof Iterable) {
             for (Object unit : (Iterable<?>) all) {
                 if (unit != null && factory.isInstance(unit)
-                        && entry.groupIds.contains(unitId(unit))) factories.add(unit);
+                        && entry.groupIds.contains(unitId(unit))
+                        && isFactoryAlive(unit)) factories.add(unit);
             }
         }
         if (factories.isEmpty()) return 0;
@@ -1347,9 +1374,30 @@ final class AutoReinforce {
 
     private void checkNewMatch() {
         int tick = currentTick();
-        if (tick < 0) return;
-        if (lastMatchTick >= 0 && tick < lastMatchTick) clearConfig();
-        lastMatchTick = tick;
+        SimulationLifecycle.Observation observation = simulationLifecycle.observe(
+                tick, host.completedResyncGeneration());
+        if (observation == SimulationLifecycle.Observation.RESYNC) {
+            prepareAfterResync(tick);
+        } else if (observation == SimulationLifecycle.Observation.NEW_MATCH) {
+            clearConfig();
+        }
+    }
+
+    private void prepareAfterResync(int tick) {
+        popupGroup = null;
+        popupAction = null;
+        popupBuildPendingKey = null;
+        dismissedKey = null;
+        popupSeenTick = -1;
+        lastPreviewTick = Integer.MIN_VALUE;
+        previewRetryTicks.clear();
+        lastTick = tick - (weightMode() ? 6 : 30);
+        selectedCacheTick = Integer.MIN_VALUE;
+        synchronized (selectedFactoryIds) {
+            selectedFactoryIds.clear();
+            selectedFactoryObjects.clear();
+        }
+        dismissPopup(false);
     }
 
     private void clearConfig() {

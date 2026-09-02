@@ -51,11 +51,6 @@ internal fun loadModuleBitmap(context: Context, resourceId: Int): ImageBitmap? {
     }.getOrNull()
 }
 
-/**
- * Resource lookup can run inside the game's package after an Xposed injection.
- * Keep an APK-asset fallback so the large module header cannot become empty
- * when the host Resource table rejects the module resource id.
- */
 private fun loadModuleAssetBitmap(context: Context, fileName: String): ImageBitmap? {
     return runCatching {
         val moduleContext = if (context.packageName == BuildConfig.APPLICATION_ID) {
@@ -73,10 +68,6 @@ private fun loadModuleAssetBitmap(context: Context, fileName: String): ImageBitm
     }.getOrNull()
 }
 
-/**
- * Draws the SVG-derived logo in two layers so theme tint changes the black
- * silhouette while the original white eyes and mouth remain visible.
- */
 @Composable
 internal fun ModuleLogo(
     modifier: Modifier = Modifier,
@@ -111,7 +102,6 @@ internal fun ModuleLogo(
                 bitmap = highlights,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                // onPrimary is Material 3's contrasting color for primary.
                 colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onPrimary),
                 modifier = Modifier.fillMaxSize()
             )

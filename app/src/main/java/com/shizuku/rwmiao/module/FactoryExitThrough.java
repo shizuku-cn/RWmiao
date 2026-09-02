@@ -8,10 +8,6 @@ import io.github.libxposed.api.XposedInterface;
 
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_FACTORY_EXIT_THROUGH;
 
-/**
- * Sends a native move command for a unit immediately after factory completion.
- * The target factory's native rally point is used as-is.
- */
 final class FactoryExitThrough {
     private static final String TAG = "RWmiao";
 
@@ -76,8 +72,6 @@ final class FactoryExitThrough {
 
     private void dispatchToRally(Object productionQueue, Object result) throws Throwable {
         if (productionQueue == null || result == null) return;
-        // JADX displays the queue's original field `a` as `f502a` to avoid a
-        // name collision in decompiled Java. Reflection must use the DEX name.
         Object producer = host.findFieldValue(productionQueue, "a");
         if (producer == null || !factoryClass.isInstance(producer)) return;
         Object rallyValue = host.findFieldValue(productionQueue, "b");
@@ -85,15 +79,11 @@ final class FactoryExitThrough {
         PointF rally = (PointF) rallyValue;
         if (!Float.isFinite(rally.x) || !Float.isFinite(rally.y)) return;
 
-        // Only the local player's factory is allowed to emit the extra command.
-        // Other clients receive the same native command through multiplayer sync.
         Object engine = host.findEngine(loader);
         Object localTeam = host.findField(engine.getClass(), "bp").get(engine);
         Object producerTeam = host.findFieldValue(producer, "bZ");
         if (localTeam == null || producerTeam != localTeam) return;
 
-        // A factory can also complete a building/special object. Only units get
-        // the exit-through behavior requested by this feature.
         if (!unitClass.isInstance(result) || buildingClass.isInstance(result)) return;
         Object command = createCommand.invoke(host.findField(engine.getClass(), "cc").get(engine),
                 localTeam);

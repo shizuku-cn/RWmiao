@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Locale;
 import java.util.WeakHashMap;
 
-/** Draws one current unit-production queue item at each producing factory. */
 final class FactoryCountdownDrawing {
     private static final float LINE_SPACING = 1.15f;
     private final Map<Object, FactoryLabel> labels = new WeakHashMap<>();
@@ -33,9 +32,6 @@ final class FactoryCountdownDrawing {
         Object queue = runtime.currentQueue.invoke(unit);
         if (queue == null) return;
 
-        // The native queue also contains building-placement actions. The action's
-        // native f() flag is the authoritative distinction: only true means a
-        // unit is being produced.
         FactoryState state = states.get(unit);
         if (state == null || state.queue != queue) {
             Object actionId = runtime.queueAction.get(queue);
@@ -53,8 +49,6 @@ final class FactoryCountdownDrawing {
                 * runtime.number(runtime.factorySpeed.invoke(unit));
         if (rate <= 0.0f || progress < 0.0f || progress >= 1.0f) return;
 
-        // q.b * factory.ca() advances normalized progress per game tick; the
-        // native simulation runs at 60 ticks per second.
         float ratePerSecond = rate * 60.0f;
         float totalSeconds = 1.0f / ratePerSecond;
         float remainingSeconds = (1.0f - progress) / ratePerSecond;
@@ -71,9 +65,6 @@ final class FactoryCountdownDrawing {
 
         Paint paint = relation == 0 ? config.selfFactoryText
                 : relation == 1 ? config.enemyFactoryText : config.allyFactoryText;
-        // Keep one logical text() overlay anchored at the building center.
-        // The target Canvas backend does not interpret '\n' itself, so the
-        // renderer helper lays out this one logical value as two baselines.
         if (draw.save != null && draw.restore != null && draw.scale != null
                 && scale > 0.0f && scale != 1.0f) {
             draw.save.invoke(renderer);

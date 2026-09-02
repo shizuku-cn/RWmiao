@@ -1,10 +1,12 @@
 package com.shizuku.rwmiao.module.drawing;
 
 import android.content.Context;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 
 import com.shizuku.rwmiao.module.RWmiaoModule;
+import com.shizuku.rwmiao.module.SimulationLifecycle;
 import com.shizuku.rwmiao.module.support.GameFrameDispatcher;
 
 import java.lang.reflect.Field;
@@ -14,54 +16,55 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
-
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.shizuku.rwmiao.config.SettingsContract.*;
 
-/**
- * World drawing features with one shared overlay hook.
- *
- * The game already exposes the authoritative factory queue through d.s.cX().
- * The queue item stores progress in m and its normalized rate in b; production
- * advances with b * factory.ca() * delta, so the displayed total is
- * 1 / (b * factory.ca()). Nuclear and anti-nuclear ammunition are the native
- * unit fields y.c and c.d respectively. Launcher instances are resolved from
- * ce.bn() using both the concrete native class and q().i() unit type identity,
- * then drawn in the shared post-map pass at the unit center.
- */
 public final class Drawing {
+    private static final int GAME_TIME_MILLIS_PER_SECOND = 1000;
     private static final int KIND_RANGE = 1;
     private static final int KIND_LINE = 1 << 1;
     private static final int KIND_FACTORY = 1 << 2;
-    private static final int CANDIDATE_REFRESH_FRAMES = 15;
+    private static final int CANDIDATE_REFRESH_FRAMES = 20;
     private static final String TAG = "RWmiao";
     private final RWmiaoModule host;
     private final ClassLoader loader;
-    private final Set<Object> manualDrawSet = weakSet();
-    private final Set<Object> manualHideSet = weakSet();
-    private final Set<Object> manualLineSet = weakSet();
-    private final Set<Object> manualLineHideSet = weakSet();
+    private final Set<Long> manualDrawSet = ConcurrentHashMap.newKeySet();
+    private final Set<Long> manualHideSet = ConcurrentHashMap.newKeySet();
+    private final Set<Long> manualLineSet = ConcurrentHashMap.newKeySet();
+    private final Set<Long> manualLineHideSet = ConcurrentHashMap.newKeySet();
     private final Map<Object, Integer> movementBits = new WeakHashMap<>();
     private final Map<Object, Integer> teamRelations = new WeakHashMap<>();
     private final AttackRangeDrawing rangeDrawing;
     private final TargetLineDrawing targetLineDrawing;
-    private final AmmoDrawing ammoDrawing = new AmmoDrawing();
     private final FactoryCountdownDrawing factoryDrawing = new FactoryCountdownDrawing();
     private final ArrayList<DrawCandidate> frameCandidates = new ArrayList<>();
+    private final Paint gameDurationPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Object[] gameDurationDrawArgs = new Object[4];
     private volatile DrawConfig cachedConfig;
     private volatile boolean candidatesDirty = true;
     private int framesUntilCandidateRefresh;
     private RuntimeAccess runtime;
     private RendererAccess rendererAccess;
     private Object relationPlayer;
+    private final SimulationLifecycle simulationLifecycle = new SimulationLifecycle();
     private Method drawMethod;
     private GameFrameDispatcher.Registration drawRegistration;
+    private int lastGameDurationSecond = -1;
+    private String gameDurationText = "0:00";
 
     public Drawing(RWmiaoModule host, ClassLoader loader) {
         this.host = host;
         this.loader = loader;
         this.rangeDrawing = new AttackRangeDrawing(host);
         this.targetLineDrawing = new TargetLineDrawing();
+        gameDurationPaint.setStyle(Paint.Style.FILL);
+        gameDurationPaint.setColor(Color.WHITE);
+        gameDurationPaint.setTextAlign(Paint.Align.LEFT);
+        gameDurationPaint.setTextSize(15.0f);
+        gameDurationDrawArgs[1] = 8.0f;
+        gameDurationDrawArgs[2] = 16.0f;
+        gameDurationDrawArgs[3] = gameDurationPaint;
     }
 
     public void install() throws Throwable {
@@ -92,7 +95,6 @@ public final class Drawing {
     public void refreshSettings() {
         cachedConfig = null;
         candidatesDirty = true;
-        ammoDrawing.clear();
         factoryDrawing.clear();
         if (worldDrawingConfigured() || !manualDrawSet.isEmpty() || !manualLineSet.isEmpty()) {
             ensureHook();
@@ -103,17 +105,23 @@ public final class Drawing {
 
     public void toggleSelected(boolean range) {
         boolean enable = !allSelectedEnabled(range);
+        setSelected(range, enable);
+    }
+
+    public void setSelected(boolean range, boolean enable) {
         try {
             for (Object unit : selectedUnits()) {
                 if (!hasAttackRange(unit)) continue;
-                Set<Object> on = range ? manualDrawSet : manualLineSet;
-                Set<Object> off = range ? manualHideSet : manualLineHideSet;
+                long id = unitId(unit);
+                if (id < 0) continue;
+                Set<Long> on = range ? manualDrawSet : manualLineSet;
+                Set<Long> off = range ? manualHideSet : manualLineHideSet;
                 if (enable) {
-                    off.remove(unit);
-                    on.add(unit);
+                    off.remove(id);
+                    on.add(id);
                 } else {
-                    on.remove(unit);
-                    off.add(unit);
+                    on.remove(id);
+                    off.add(id);
                 }
             }
             if (enable) {
@@ -156,8 +164,8 @@ public final class Drawing {
                     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             return preferences.getBoolean(KEY_SHOW_ATTACK_RANGE, false)
                     || preferences.getBoolean(KEY_SHOW_TARGET_LINE, false)
-                    || preferences.getBoolean(KEY_SHOW_AMMO_COUNT, false)
-                    || preferences.getBoolean(KEY_SHOW_FACTORY_COUNTDOWN, false);
+                    || preferences.getBoolean(KEY_SHOW_FACTORY_COUNTDOWN, false)
+                    || preferences.getBoolean(KEY_SHOW_GAME_DURATION, false);
         } catch (Throwable ignored) {
             return false;
         }
@@ -180,10 +188,11 @@ public final class Drawing {
     }
 
     private boolean isDrawEnabled(Object unit, boolean range) throws Throwable {
-        Set<Object> on = range ? manualDrawSet : manualLineSet;
-        Set<Object> off = range ? manualHideSet : manualLineHideSet;
-        if (on.contains(unit)) return true;
-        if (off.contains(unit)) return false;
+        long id = unitId(unit);
+        Set<Long> on = range ? manualDrawSet : manualLineSet;
+        Set<Long> off = range ? manualHideSet : manualLineHideSet;
+        if (on.contains(id)) return true;
+        if (off.contains(id)) return false;
         Object engine = host.findEngine(loader);
         Context context = (Context) host.findField(engine.getClass(), "am").get(engine);
         if (!context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -199,7 +208,6 @@ public final class Drawing {
         return host.selected(relation, players) && host.typeSelected(unit, types);
     }
 
-    /** Resolve reflection once; the frame loop uses direct Field reads and cached classifications. */
     private void drawFrame() throws Throwable {
         DrawConfig known = cachedConfig;
         if (known != null && !known.anyConfigured()
@@ -209,7 +217,17 @@ public final class Drawing {
         }
         Object engine = host.findEngine(loader);
         if (engine == null) return;
-        DrawConfig config = drawConfig((Context) runtime.context.get(engine));
+        SimulationLifecycle.Observation lifecycle = simulationLifecycle.observe(
+                runtime.tick.getInt(engine), host.completedResyncGeneration());
+        if (lifecycle == SimulationLifecycle.Observation.RESYNC) {
+            invalidateWorldCaches();
+        } else if (lifecycle == SimulationLifecycle.Observation.NEW_MATCH) {
+            clearManualState();
+            invalidateWorldCaches();
+        }
+        Object engineContext = runtime.context.get(engine);
+        if (!(engineContext instanceof Context)) return;
+        DrawConfig config = drawConfig((Context) engineContext);
         if (!config.anyConfigured()
                 && manualDrawSet.isEmpty() && manualLineSet.isEmpty()) {
             disableHook();
@@ -225,13 +243,23 @@ public final class Drawing {
         }
         if (config.drawRanges && draw.circle == null) config.drawRanges = false;
         if (config.drawLines && draw.line == null) config.drawLines = false;
-        if ((config.drawAmmo || config.drawFactory) && draw.text == null) {
-            config.drawAmmo = false;
+        if (config.drawFactory && draw.text == null) {
             config.drawFactory = false;
         }
         if (!config.anyConfigured()
                 && manualDrawSet.isEmpty() && manualLineSet.isEmpty()) {
             disableHook();
+            return;
+        }
+
+        if (config.showGameDuration) {
+            drawGameDuration(engine, renderer, draw);
+        }
+
+        boolean needsFrameCandidates = config.drawRanges || config.drawLines || config.drawFactory
+                || !manualDrawSet.isEmpty() || !manualLineSet.isEmpty();
+        if (!needsFrameCandidates) {
+            if (!frameCandidates.isEmpty()) frameCandidates.clear();
             return;
         }
 
@@ -246,24 +274,17 @@ public final class Drawing {
         float scale = runtime.scale.getFloat(engine);
         float width = host.number(runtime.screenWidth.get(engine));
         float height = host.number(runtime.screenHeight.get(engine));
-        boolean needsFrameCandidates = config.drawRanges || config.drawLines || config.drawFactory
-                || !manualDrawSet.isEmpty() || !manualLineSet.isEmpty();
-        boolean needsUnitRefresh = needsFrameCandidates || config.drawAmmo;
-        if (needsUnitRefresh && (candidatesDirty || framesUntilCandidateRefresh-- <= 0)) {
-            Object units = runtime.allUnits.invoke(null);
-            if (!(units instanceof Iterable)) return;
-            Iterable<?> iterable = (Iterable<?>) units;
-            if (needsFrameCandidates) refreshCandidates(iterable, config, player);
-            else frameCandidates.clear();
-            if (config.drawAmmo) ammoDrawing.refresh(iterable, runtime);
-            else ammoDrawing.clear();
+        if (needsFrameCandidates && (candidatesDirty || framesUntilCandidateRefresh-- <= 0)) {
+            Object allUnits = runtime.allUnits.invoke(null);
+            if (!(allUnits instanceof Iterable)) return;
+            refreshCandidates((Iterable<?>) allUnits, config, player);
             candidatesDirty = false;
             framesUntilCandidateRefresh = CANDIDATE_REFRESH_FRAMES;
-        } else if (!needsUnitRefresh && (!frameCandidates.isEmpty() || ammoDrawing.hasTracked())) {
+        } else if (!needsFrameCandidates && !frameCandidates.isEmpty()) {
             frameCandidates.clear();
-            ammoDrawing.clear();
         }
-        if (frameCandidates.isEmpty() && !ammoDrawing.hasTracked()) {
+
+        if (frameCandidates.isEmpty()) {
             return;
         }
 
@@ -272,11 +293,12 @@ public final class Drawing {
             for (DrawCandidate candidate : frameCandidates) {
                 Object unit = candidate.unit;
                 if (runtime.dead.getBoolean(unit) || runtime.attached.get(unit) != null) continue;
-                boolean manualRange = manualDrawSet.contains(unit);
-                boolean manualLine = manualLineSet.contains(unit);
-                boolean mayRange = !manualHideSet.contains(unit)
+                long id = unitId(unit);
+                boolean manualRange = manualDrawSet.contains(id);
+                boolean manualLine = manualLineSet.contains(id);
+                boolean mayRange = !manualHideSet.contains(id)
                         && (manualRange || config.drawRanges);
-                boolean mayLine = !manualLineHideSet.contains(unit)
+                boolean mayLine = !manualLineHideSet.contains(id)
                         && (manualLine || config.drawLines);
                 if (!mayRange && !mayLine
                         && (candidate.kinds & KIND_FACTORY) == 0) continue;
@@ -306,35 +328,51 @@ public final class Drawing {
                             worldX, worldY, x, y, scale, width, height);
                 }
             }
-            if (config.drawAmmo) {
-                for (Map.Entry<Object, Integer> entry : ammoDrawing.tracked()) {
-                    Object unit = entry.getKey();
-                    if (unit == null || runtime.dead.getBoolean(unit)
-                            || runtime.attached.get(unit) != null) continue;
-                    float x = (runtime.x.getFloat(unit) - cameraX) * scale;
-                    float y = (runtime.y.getFloat(unit) - cameraY) * scale;
-                    int relation = relation(player, runtime.team.get(unit));
-                    ammoDrawing.drawScreen(renderer, draw, config, runtime, unit,
-                            entry.getValue(), relation, x, y, width, height);
-                }
-            }
         } finally {
             if (draw.restore != null) draw.restore.invoke(renderer);
         }
     }
 
-    /** Refresh the expensive global-unit traversal only a few times per second. */
+    private void drawGameDuration(Object engine, Object renderer, RendererAccess draw)
+            throws Throwable {
+        if (!runtime.levelLoaded.getBoolean(engine) || draw.text == null) {
+            lastGameDurationSecond = -1;
+            return;
+        }
+        int millis = Math.max(0, runtime.gameTime.getInt(engine));
+        int second = millis / GAME_TIME_MILLIS_PER_SECOND;
+        if (second != lastGameDurationSecond) {
+            lastGameDurationSecond = second;
+            gameDurationText = formatGameDuration(second);
+            gameDurationDrawArgs[0] = gameDurationText;
+        }
+        draw.text.invoke(renderer, gameDurationDrawArgs);
+    }
+
+    private String formatGameDuration(int totalSeconds) {
+        int minutes = totalSeconds / 60;
+        int seconds = totalSeconds % 60;
+        if (minutes < 60) {
+            return minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
+        }
+        int hours = minutes / 60;
+        minutes %= 60;
+        return hours + ":" + (minutes < 10 ? "0" : "") + minutes
+                + ":" + (seconds < 10 ? "0" : "") + seconds;
+    }
+
     private void refreshCandidates(Iterable<?> units, DrawConfig config, Object player)
             throws Throwable {
         frameCandidates.clear();
         for (Object unit : units) {
             if (unit == null || !runtime.battleUnit.isInstance(unit)
                     || runtime.dead.getBoolean(unit) || runtime.attached.get(unit) != null) continue;
-            boolean manualRange = manualDrawSet.contains(unit);
-            boolean manualLine = manualLineSet.contains(unit);
-            boolean mayRange = !manualHideSet.contains(unit)
+            long id = unitId(unit);
+            boolean manualRange = manualDrawSet.contains(id);
+            boolean manualLine = manualLineSet.contains(id);
+            boolean mayRange = !manualHideSet.contains(id)
                     && (manualRange || config.drawRanges);
-            boolean mayLine = !manualLineHideSet.contains(unit)
+            boolean mayLine = !manualLineHideSet.contains(id)
                     && (manualLine || config.drawLines);
             int kinds = 0;
             if (mayRange) kinds |= KIND_RANGE;
@@ -402,10 +440,10 @@ public final class Drawing {
         created.rangeTypes = host.prefInt(context, KEY_RANGE_UNIT_TYPES, 31);
         created.linePlayers = host.prefInt(context, KEY_LINE_PLAYER_FILTER, 2);
         created.lineTypes = host.prefInt(context, KEY_LINE_UNIT_TYPES, 31);
-        created.drawAmmo = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getBoolean(KEY_SHOW_AMMO_COUNT, false);
         created.drawFactory = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(KEY_SHOW_FACTORY_COUNTDOWN, false);
+        created.showGameDuration = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_SHOW_GAME_DURATION, false);
         created.factoryPlayers = host.prefInt(context,
                 KEY_FACTORY_PLAYER_FILTER, DEFAULT_FACTORY_PLAYER_FILTER);
         created.selfRange = host.makePaint(host.prefInt(context,
@@ -420,12 +458,6 @@ public final class Drawing {
                 KEY_LINE_COLOR_ENEMY, DEFAULT_LINE_COLOR_ENEMY), 1.0f);
         created.allyLine = host.makePaint(host.prefInt(context,
                 KEY_LINE_COLOR_ALLY, DEFAULT_LINE_COLOR_ALLY), 1.0f);
-        created.selfText = textPaint(host.prefInt(context,
-                KEY_AMMO_COLOR_SELF, DEFAULT_AMMO_COLOR_SELF));
-        created.enemyText = textPaint(host.prefInt(context,
-                KEY_AMMO_COLOR_ENEMY, DEFAULT_AMMO_COLOR_ENEMY));
-        created.allyText = textPaint(host.prefInt(context,
-                KEY_AMMO_COLOR_ALLY, DEFAULT_AMMO_COLOR_ALLY));
         created.selfFactoryText = factoryTextPaint(host.prefInt(context,
                 KEY_FACTORY_COLOR_SELF, DEFAULT_FACTORY_COLOR_SELF));
         created.enemyFactoryText = factoryTextPaint(host.prefInt(context,
@@ -453,8 +485,27 @@ public final class Drawing {
         return paint;
     }
 
-    private static Set<Object> weakSet() {
-        return Collections.newSetFromMap(new WeakHashMap<>());
+    private long unitId(Object unit) {
+        if (unit == null || runtime == null) return -1L;
+        try { return runtime.id.getLong(unit); }
+        catch (Throwable ignored) { return -1L; }
+    }
+
+    private void invalidateWorldCaches() {
+        frameCandidates.clear();
+        movementBits.clear();
+        teamRelations.clear();
+        relationPlayer = null;
+        candidatesDirty = true;
+        framesUntilCandidateRefresh = 0;
+        factoryDrawing.clear();
+    }
+
+    private void clearManualState() {
+        manualDrawSet.clear();
+        manualHideSet.clear();
+        manualLineSet.clear();
+        manualLineHideSet.clear();
     }
 
     final class RuntimeAccess {
@@ -464,12 +515,16 @@ public final class Drawing {
         final Field context = host.findField(engine, "am");
         final Field renderer = host.findField(engine, "bL");
         final Field player = host.findField(engine, "bp");
+        final Field levelLoaded = host.findField(engine, "bD");
+        final Field gameTime = host.findField(engine, "bv");
+        final Field tick = host.findField(engine, "bu");
         final Field cameraX = host.findField(engine, "ct");
         final Field cameraY = host.findField(engine, "cu");
         final Field scale = host.findField(engine, "cU");
         final Field screenWidth = host.findField(engine, "cC");
         final Field screenHeight = host.findField(engine, "cE");
         final Field dead = host.findField(unit, "bX");
+        final Field id = host.findField(unit, "ej");
         final Field attached = host.findField(unit, "cP");
         final Field team = host.findField(unit, "bZ");
         final Field x = host.findField(unit, "eq");
@@ -477,22 +532,10 @@ public final class Drawing {
         final Field target = host.findField(battleUnit, "T");
         final Method range = host.findNoArgMethod(battleUnit, "l");
         final Method movement = host.findNoArgMethod(unit, "g");
-        final Class<?> nukeClass = optionalClass("game.units.d.y");
-        final Class<?> antiNukeClass = optionalClass("game.units.d.c");
-        final Class<?> unitTypeClass = optionalClass("game.units.cj");
-        final Method unitType = host.findNoArgMethod(unit, "q");
-        final Object nukeType = optionalStaticField(unitTypeClass, "C");
-        final Object antiNukeType = optionalStaticField(unitTypeClass, "D");
         final Class<?> factory = optionalClass("game.units.d.s");
         final Class<?> queue = optionalClass("game.units.d.q");
         final Class<?> actionId = optionalClass("game.units.a.c");
         final Class<?> actionBase = optionalClass("game.units.a.s");
-        final Field nukeAmmo = optionalField(nukeClass, "c");
-        final Field antiNukeAmmo = optionalField(antiNukeClass, "d");
-        final Map<Class<?>, Method> unitTypeMethods = new WeakHashMap<>();
-        final Map<Class<?>, Method> typeNameMethods = new WeakHashMap<>();
-        final Map<Class<?>, Field> nukeAmmoFields = new WeakHashMap<>();
-        final Map<Class<?>, Field> antiNukeAmmoFields = new WeakHashMap<>();
         final Field queueProgress = optionalField(queue, "m");
         final Field queueRate = optionalField(queue, "b");
         final Field queueAction = optionalField(queue, "j");
@@ -531,74 +574,6 @@ public final class Drawing {
             return type == null ? null : host.findNoArgMethod(type, name);
         }
 
-        private Object optionalStaticField(Class<?> type, String name) {
-            if (type == null) return null;
-            try {
-                return host.findField(type, name).get(null);
-            } catch (Throwable ignored) {
-                return null;
-            }
-        }
-
-        int ammoKind(Object value) {
-            if (value == null || !battleUnit.isInstance(value)) return 0;
-            if (nukeClass != null && nukeClass.isInstance(value)) return 1;
-            if (antiNukeClass != null && antiNukeClass.isInstance(value)) return 2;
-            try {
-                Class<?> valueClass = value.getClass();
-                Method method = unitTypeMethods.get(valueClass);
-                if (method == null) {
-                    method = host.findNoArgMethod(valueClass, "q");
-                    if (method != null) unitTypeMethods.put(valueClass, method);
-                }
-                Object type = method != null ? method.invoke(value)
-                        : unitType != null ? unitType.invoke(value) : null;
-                if (type == nukeType && nukeType != null) return 1;
-                if (type == antiNukeType && antiNukeType != null) return 2;
-                String name = nativeTypeName(type);
-                if ("NukeLaucher".equalsIgnoreCase(name)
-                        || "NukeLauncher".equalsIgnoreCase(name)) return 1;
-                if ("AntiNukeLaucher".equalsIgnoreCase(name)
-                        || "AntiNukeLauncher".equalsIgnoreCase(name)) return 2;
-            } catch (Throwable ignored) {
-            }
-            return 0;
-        }
-
-        private String nativeTypeName(Object type) {
-            if (type == null) return "";
-            try {
-                Class<?> typeClass = type.getClass();
-                Method method = typeNameMethods.get(typeClass);
-                if (method == null) {
-                    method = host.findNoArgMethod(typeClass, "i");
-                    if (method != null) typeNameMethods.put(typeClass, method);
-                }
-                Object result = method == null ? null : method.invoke(type);
-                return result instanceof String ? (String) result : type.toString();
-            } catch (Throwable ignored) {
-                return type.toString();
-            }
-        }
-
-        int ammoCount(Object value, int kind) throws IllegalAccessException {
-            Field field = kind == 1 ? nukeAmmo : kind == 2 ? antiNukeAmmo : null;
-            if (field == null || !field.getDeclaringClass().isInstance(value)) {
-                Class<?> valueClass = value.getClass();
-                Map<Class<?>, Field> fields = kind == 1 ? nukeAmmoFields : antiNukeAmmoFields;
-                field = fields.get(valueClass);
-                if (field == null) {
-                    try {
-                        field = host.findField(valueClass, kind == 1 ? "c" : "d");
-                        fields.put(valueClass, field);
-                    } catch (Throwable ignored) {
-                        field = null;
-                    }
-                }
-            }
-            return field != null && field.getType() == int.class ? field.getInt(value) : 0;
-        }
-
         float number(Object value) {
             return value instanceof Number ? ((Number) value).floatValue() : 0.0f;
         }
@@ -627,8 +602,6 @@ public final class Drawing {
                     String.class, float.class, float.class, Paint.class);
         }
 
-        /** Draw one logical multiline label; the target Canvas backend has no
-         * newline-aware drawText overload. */
         void multilineText(Object renderer, String[] lines, float centerX, float centerY,
                            Paint paint, float lineScale) throws Throwable {
             if (lines == null || lines.length == 0) return;
@@ -658,8 +631,8 @@ public final class Drawing {
         int rangeTypes;
         int linePlayers;
         int lineTypes;
-        boolean drawAmmo;
         boolean drawFactory;
+        boolean showGameDuration;
         int factoryPlayers;
         Paint selfRange;
         Paint enemyRange;
@@ -667,14 +640,11 @@ public final class Drawing {
         Paint selfLine;
         Paint enemyLine;
         Paint allyLine;
-        Paint selfText;
-        Paint enemyText;
-        Paint allyText;
         Paint selfFactoryText;
         Paint enemyFactoryText;
         Paint allyFactoryText;
         boolean anyConfigured() {
-            return drawRanges || drawLines || drawAmmo || drawFactory;
+            return drawRanges || drawLines || drawFactory || showGameDuration;
         }
     }
 

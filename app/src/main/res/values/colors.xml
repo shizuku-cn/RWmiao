@@ -1,5 +1,5 @@
 <resources>
-    <!-- Static Material 3 fallback for launchers below Android 12. -->
+    <!-- Static Material 3 fallback below Android 12. / Android 12 以下的静态 Material 3 回退。 -->
     <color name="icon_background">#EADDFF</color>
     <color name="icon_foreground">#6750A4</color>
 </resources>

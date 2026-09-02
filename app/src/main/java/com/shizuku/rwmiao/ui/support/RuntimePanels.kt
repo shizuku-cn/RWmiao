@@ -165,8 +165,6 @@ object RuntimePanels {
             actions = {
                 TextButton(onClick = { dialog.dismiss() }) { Text("取消") }
                 Button(onClick = {
-                    // Dismiss the independent dialog composition before mutating the
-                    // script list owned by the settings-page composition.
                     dialog.dismiss()
                     onConfirm.run()
                 }) { Text("删除") }
@@ -421,7 +419,7 @@ object RuntimePanels {
         update?.invoke(data)
     }
 
-    private fun showDialog(
+    internal fun showDialog(
         activity: Activity,
         widthFraction: Float,
         heightFraction: Float,

@@ -1,6 +1,5 @@
 package com.shizuku.rwmiao.module.drawing;
 
-/** Draws the line from a unit to its current target. */
 final class TargetLineDrawing {
     void draw(Object renderer, Drawing.RendererAccess draw, Drawing.DrawConfig config,
               Drawing.RuntimeAccess runtime, Object unit, int relation,

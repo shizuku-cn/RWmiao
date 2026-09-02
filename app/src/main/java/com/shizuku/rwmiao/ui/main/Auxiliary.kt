@@ -104,21 +104,17 @@ internal fun AuxiliaryPage(
         item {
             SectionCard {
                 SwitchSetting(
-                    "可见其它玩家队伍消息",
-                    "仅房主可用：查看敌方玩家的队伍消息（[队伍 X]标记）",
+                    "可见其他玩家的队伍消息",
+                    "仅房主可用：可见敌方玩家的队伍消息（[队伍 X]标记）",
                     state.enemyTeamChat
                 ) {
-                    onState(state.copy(
-                        enemyTeamChat = it,
-                        enemyMapPings = if (it) state.enemyMapPings else false
-                    ))
+                    onState(state.copy(enemyTeamChat = it))
                 }
                 DividerSetting()
                 SwitchSetting(
-                    "可见地图标记",
-                    "可见敌方队伍的地图标记，如：“表示快乐”“开始撤退”",
-                    state.enemyMapPings,
-                    enabled = state.enemyTeamChat
+                    "可见其他队伍的地图标记",
+                    "无限制可用：可见敌方队伍的地图标记，如：“表示快乐”“开始撤退”",
+                    state.enemyMapPings
                 ) { onState(state.copy(enemyMapPings = it)) }
             }
         }
@@ -138,6 +134,33 @@ internal fun AuxiliaryPage(
                     "在界面右侧添加按钮,自由框选模式下手势画封闭图形后框选其中单位",
                     state.freeSelection
                 ) { onState(state.copy(freeSelection = it)) }
+            }
+        }
+        item {
+            SectionCard(compact = true) {
+                SwitchSetting(
+                    "自由建造",
+                    "在可建造的单位选中面板添加按钮，自由建造模式下选择待建造单位后可用手势建造该单位或替换其它待建造单位",
+                    state.freeBuild
+                ) { onState(state.copy(freeBuild = it)) }
+            }
+        }
+        item {
+            SectionCard(compact = true) {
+                SwitchSetting(
+                    "一键全选",
+                    "在界面右侧添加按钮,可一键选中所有自己的单位(包括建筑)",
+                    state.selectAll
+                ) { onState(state.copy(selectAll = it)) }
+            }
+        }
+        item {
+            SectionCard(compact = true) {
+                SwitchSetting(
+                    "快速跳转交战区",
+                    "在界面右侧添加按钮，可快速切换视角到交战区域",
+                    state.combatView
+                ) { onState(state.copy(combatView = it)) }
             }
         }
     }

@@ -5,7 +5,6 @@ import java.util.Map;
 import java.util.WeakHashMap;
 import io.github.libxposed.api.XposedInterface;
 
-/** Visibility override for already-dead-filtered units. */
 final class ViewAll {
     private final RWmiaoModule host;
     private final ClassLoader loader;

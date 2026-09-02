@@ -25,16 +25,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -56,7 +52,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.isSystemInDarkTheme
-import android.os.Build
 import com.shizuku.rwmiao.config.SettingsContract.*
 import kotlinx.coroutines.delay
 
@@ -70,8 +65,7 @@ internal data class MenuItem(
 internal fun SettingsScreen(page: SettingsPage) {
     var state by remember { mutableStateOf(SettingsState.load(page.preferences)) }
     var uiPreferences by remember { mutableStateOf(UiPreferences.load(page.preferences)) }
-    val context = LocalContext.current
-    LaunchedEffect(uiPreferences.themeMode, uiPreferences.dynamicColor) {
+    LaunchedEffect(uiPreferences.themeMode, uiPreferences.colorMode) {
         page.syncLauncherIcon(uiPreferences)
     }
     var selectedPage by remember {
@@ -80,7 +74,7 @@ internal fun SettingsScreen(page: SettingsPage) {
     val auxiliaryListState = rememberLazyListState()
     val drawListState = rememberLazyListState()
     val environmentListState = rememberLazyListState()
-    val scriptListState = rememberLazyListState()
+    val scriptScrollState = rememberScrollState()
     val preferencesListState = rememberLazyListState()
     val menu = remember {
         listOf(
@@ -89,8 +83,6 @@ internal fun SettingsScreen(page: SettingsPage) {
             MenuItem("环境", Icons.environment),
             MenuItem("脚本", Icons.script),
             MenuItem("AI", Icons.ai),
-            // Keep the original navigation button icon. The SVG belongs only
-            // in the large module header on the module page.
             MenuItem("模块", Icons.module)
         )
     }
@@ -101,21 +93,19 @@ internal fun SettingsScreen(page: SettingsPage) {
         UI_THEME_DARK -> true
         else -> systemDark
     }
-    val colorScheme = if (uiPreferences.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        if (useDarkTheme) dynamicDarkColorScheme(LocalContext.current)
-        else dynamicLightColorScheme(LocalContext.current)
-    } else {
-        if (useDarkTheme) darkColorScheme() else lightColorScheme()
-    }
+    val colorScheme = moduleColorScheme(
+        colorMode = uiPreferences.colorMode,
+        darkTheme = useDarkTheme,
+        context = LocalContext.current
+    )
     val activeListState = when (selectedPage) {
         0 -> auxiliaryListState
         1 -> drawListState
         2 -> environmentListState
-        3 -> scriptListState
         5 -> preferencesListState
         else -> null
     }
-    val contentScrolled = activeListState?.let {
+    val contentScrolled = if(selectedPage==3)scriptScrollState.value>0 else activeListState?.let {
         it.firstVisibleItemIndex > 0 || it.firstVisibleItemScrollOffset > 0
     } == true
 
@@ -240,11 +230,24 @@ internal fun SettingsScreen(page: SettingsPage) {
                             0 -> AuxiliaryPage(state, auxiliaryListState) { state = it }
                             1 -> DrawPage(state, drawListState) { state = it }
                             2 -> EnvironmentPage(page, environmentListState)
-                            3 -> ScriptPage(page, scriptListState)
-                            5 -> Preferences(page, uiPreferences, preferencesListState) {
-                                uiPreferences = it
-                                page.saveUiPreferences(it)
-                            }
+                            3 -> ScriptPage(page, scriptScrollState)
+                            5 -> Preferences(
+                                page = page,
+                                settings = uiPreferences,
+                                listState = preferencesListState,
+                                onSettings = {
+                                    uiPreferences = it
+                                    page.saveUiPreferences(it)
+                                },
+                                onConfigurationImported = {
+                                    state = SettingsState.load(page.preferences)
+                                    uiPreferences = UiPreferences.load(page.preferences)
+                                    selectedPage = page.preferences.getInt(
+                                        KEY_UI_SELECTED_PAGE,
+                                        0
+                                    ).coerceIn(0, 5)
+                                }
+                            )
                             else -> PlaceholderPage()
                         }
                     }

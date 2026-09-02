@@ -34,10 +34,6 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_LOBBY_SEARCHER;
 import static com.shizuku.rwmiao.config.SettingsContract.LOBBY_AD_KEYWORDS_VERSION;
 import static com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME;
 
-/**
- * Replaces only the native lobby table generation. Network discovery,
- * native ordering and the native join protocol remain intact.
- */
 public final class MultiplayerLobby {
     private static final String TAG = "RWmiao";
     private static final int MAX_ADDRESS_DISPLAY_LENGTH = 22;
@@ -115,8 +111,6 @@ public final class MultiplayerLobby {
             throw new NoSuchMethodException("multiplayer lobby static refresh contract");
         }
 
-        // JADX prints synthetic field aliases such as f195a, but the DEX
-        // member name is the original short name a.
         runnableActivityField = host.findField(runnableClass, "a");
         recordFields = new RecordFields(recordClass);
         try {
@@ -137,19 +131,14 @@ public final class MultiplayerLobby {
             return result;
         });
 
-        // gi.run() is the native TableRow builder. Return before the original
-        // body so no native rows/TextViews are generated when M3 is active.
         listRunnableHook = host.hookExecutable(listRun, chain -> {
             Object activity = runnableActivityField.get(chain.getThisObject());
             if (activity instanceof Activity && installPanel((Activity) activity)) {
                 publishRooms((Activity) activity);
                 return null;
             }
-            // Safe fallback if the target layout changed and replacement was
-            // not installed: do not break the original lobby.
             return chain.proceed();
         });
-        host.log(4, TAG, "Multiplayer M3 lobby hooks installed");
     }
 
     private boolean installPanel(Activity activity) {
@@ -201,7 +190,6 @@ public final class MultiplayerLobby {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         parent.addView(panel, Math.max(0, nativeTableIndex), panelParams);
         hideNativeRefreshButton(activity);
-        host.log(4, TAG, "Replaced native multiplayer TableLayout with M3 room list");
         return true;
     }
 
@@ -250,9 +238,6 @@ public final class MultiplayerLobby {
         } catch (Throwable t) {
             host.log(5, TAG, "Unable to refresh multiplayer room list", t);
         }
-        // refreshServerList() posts the native gi runnable. Publish once now
-        // and once after that queued redraw/network handoff so the M3 panel
-        // cannot remain on a stale snapshot if the native runnable is skipped.
         publishRooms(activity);
         try {
             View decor = activity.getWindow().getDecorView();
@@ -305,11 +290,6 @@ public final class MultiplayerLobby {
         int relayId = integer(recordFields.relayId, record, 0);
         String playersText = string(recordFields.playersText, record);
         String maxPlayersText = string(recordFields.maxPlayersText, record);
-        // v/w are the native parsed counters. t/u are their wire-text
-        // counterparts and can remain stale after a room update, so use the
-        // same authoritative fields as the original lobby for both display
-        // and hasSlots/joinable decisions. Only fall back to t/u when v/w are
-        // unavailable on a compatible game build.
         int players = integer(recordFields.players, record, -1);
         if (players < 0) players = playerCount(playersText, -1);
         int maxPlayers = integer(recordFields.maxPlayers, record, -1);
@@ -341,9 +321,6 @@ public final class MultiplayerLobby {
                 && (lan || open || relayId != 0);
         boolean officialLinkAd = isOfficialLinkAd(
                 rawServerName, rawMap, mapName);
-        // The second M3 column is hostName. Match custom ad keywords against
-        // that exact displayed field only; do not use the hidden raw server
-        // metadata field, map, address, description, or version.
         boolean adLike = !official && (external || containsAdKeyword(
                 hostName));
         String visibility = lan ? "L" : (open ? "Y" : "N");
@@ -523,7 +500,6 @@ public final class MultiplayerLobby {
             maxPlayers = host.findField(type, "w");
             playersText = host.findField(type, "t");
             maxPlayersText = host.findField(type, "u");
-            // The decompiler alias f738a maps back to the real field a.
             lan = host.findField(type, "a");
             relayId = host.findField(type, "A");
             compatible = host.findCompatibleMethod(type, "b");

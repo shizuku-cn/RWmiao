@@ -1,7 +1,6 @@
 package com.shizuku.rwmiao.module.script;
 
 import android.graphics.PointF;
-import android.util.Log;
 
 import com.shizuku.rwmiao.module.RWmiaoModule;
 
@@ -11,10 +10,9 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.Set;
 
-/** The only write boundary: validated requests become native synchronized commands. */
 public final class CommandGateway {
-    private static final String TAG = "RWmiaoScript";
     private static final int MAX_COMMANDS_PER_CALLBACK = 32;
     private static final int MAX_UNITS_PER_COMMAND = 256;
     private final RWmiaoModule host;
@@ -51,6 +49,7 @@ public final class CommandGateway {
     }
 
     public void beginCallback() { issuedThisCallback = 0; }
+    public Set<String> capabilities() { return adapter.capabilities(); }
 
     public Result move(String scriptId, GameSnapshot snapshot, List<Long> unitIds,
                        float x, float y, boolean append) {
@@ -104,11 +103,9 @@ public final class CommandGateway {
             if (resolveUnitType != null && Modifier.isStatic(resolveUnitType.getModifiers()))
                 buildType = resolveUnitType.invoke(null, typeId);
         } catch (Throwable ignored) { }
-        // Compatibility fallback for versions where cj.a(String) is unavailable.
         for (UnitSnapshot unit : snapshot.units) {
             if (buildType != null) break;
-            if (typeId.equalsIgnoreCase(unit.typeId)
-                    || unit.typeId.startsWith("c_") && typeId.equalsIgnoreCase(unit.typeId.substring(2))) {
+            if (typeId.equals(unit.typeId)) {
                 try { buildType = invokeNoArg(unit.raw, "q"); } catch (Throwable ignored) { }
                 if (buildType != null) break;
             }
@@ -123,7 +120,7 @@ public final class CommandGateway {
             if (setter == null) return Result.reject("当前版本不支持 build");
             setter.invoke(command, x, y, buildType, variant);
             attach(command, units);
-            return accepted(scriptId, snapshot.tick, "build:" + typeId, units, null, x, y);
+            return accepted();
         } catch (Throwable t) { return Result.reject("build 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -156,8 +153,7 @@ public final class CommandGateway {
             PointF point = x == null || y == null ? null : new PointF(x, y);
             setter.invoke(command, id, point);
             attach(command, units);
-            return accepted(scriptId, snapshot.tick, "action:" + actionId, units, null,
-                    x == null ? Float.NaN : x, y == null ? Float.NaN : y);
+            return accepted();
         } catch (Throwable t) { return Result.reject("action 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -172,7 +168,7 @@ public final class CommandGateway {
             if (setter == null) return Result.reject("当前版本不支持 " + type);
             setter.invoke(command, x, y);
             attach(command, units);
-            return accepted(scriptId, snapshot.tick, type, units, null, x, y);
+            return accepted();
         } catch (Throwable t) { return Result.reject(type + " 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -188,7 +184,7 @@ public final class CommandGateway {
             if (setter == null) return Result.reject("当前版本不支持 " + type);
             setter.invoke(command, target.raw);
             attach(command, units);
-            return accepted(scriptId, snapshot.tick, type, units, targetId, target.x, target.y);
+            return accepted();
         } catch (Throwable t) { return Result.reject(type + " 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -218,18 +214,8 @@ public final class CommandGateway {
         return result;
     }
 
-    private Result accepted(String script, int tick, String type, List<UnitSnapshot> units,
-                            Long target, float x, float y) {
-        long id = ids.incrementAndGet();
-        StringBuilder attached = new StringBuilder();
-        for (UnitSnapshot unit : units) {
-            if (attached.length() > 0) attached.append(',');
-            attached.append(unit.id);
-        }
-        Log.i(TAG, "tick=" + tick + " script=" + script + " command=" + id
-                + " type=" + type + " units=" + attached + " target=" + target
-                + " point=" + x + "," + y);
-        return new Result(true, null, id);
+    private Result accepted() {
+        return new Result(true, null, ids.incrementAndGet());
     }
 
     private void setBoolean(Object object, String name, boolean value) throws Throwable {

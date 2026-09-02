@@ -178,10 +178,6 @@ internal fun LobbyRoomListV6(
         .filter { !version115 || it.versionName.equals("V1.15", ignoreCase = true) }
         .filter { !onlyVanilla || !it.isModded }
         .filter { !onlyModded || it.isModded }
-        // Manual pins outrank the official server. For the remaining rooms,
-        // campaign rooms outrank in-game rooms, then public Y rooms outrank
-        // password/LAN N/L rooms, and ad/duplicate rooms remain at the end.
-        // Native order is the stable tie-breaker inside every priority group.
         .sortedWith(compareBy<LobbyRoom> {
             when {
                 pinnedNames.contains(it.serverNameKey) -> 0

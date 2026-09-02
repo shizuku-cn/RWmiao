@@ -15,7 +15,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-/** Converts obfuscated runtime objects into stable semantic snapshots. */
 public final class GameAdapter {
     private final RWmiaoModule host;
     private final ClassLoader loader;
@@ -32,6 +31,8 @@ public final class GameAdapter {
     private final Field allProjectiles;
     private final Map<Long,Float> previousDurability = new HashMap<>();
     private final Map<Long,Integer> lastDamagedTick = new HashMap<>();
+    private final Map<Long,Float> lastDamageAmount = new HashMap<>();
+    private final Map<Long,Long> lastDamageSource = new HashMap<>();
     private Object snapshotMap;
     private Object snapshotEngine;
     private final Map<String,PathLayer> pathLayerCache = new HashMap<>();
@@ -69,7 +70,10 @@ public final class GameAdapter {
                 "unit.type", "unit.team", "unit.selection", "unit.build_progress",
                 "unit.weapons", "unit.movement.physics", "unit.pathing", "map.info",
                 "map.visibility", "team.resources", "unit.production", "unit.transport",
-                "projectiles.read", "unit.damage_history", "unit.abilities", "game.environment");
+                "projectiles.read", "unit.damage_history", "unit.damage_source",
+                "unit.abilities", "unit.ability_cooldown", "unit.production.details",
+                "team.resources.all", "map.tile_metadata", "map.path_search",
+                "map.path_clearance", "game.environment");
     }
 
     public GameSnapshot snapshot() throws Throwable {
@@ -94,12 +98,13 @@ public final class GameAdapter {
             }
         }
         boolean all=groups==null||groups.contains("all");
-        if(all||groups.contains("damage")){LinkedHashSet<Long> alive=new LinkedHashSet<>();for(UnitSnapshot u:result)alive.add(u.id);previousDurability.keySet().retainAll(alive);lastDamagedTick.keySet().retainAll(alive);}
+        if(all||groups.contains("damage")){LinkedHashSet<Long> alive=new LinkedHashSet<>();for(UnitSnapshot u:result)alive.add(u.id);previousDurability.keySet().retainAll(alive);lastDamagedTick.keySet().retainAll(alive);lastDamageAmount.keySet().retainAll(alive);lastDamageSource.keySet().retainAll(alive);}
+        List<Map<String,Object>> projectiles=all||groups.contains("projectiles")?projectileFacts(engine):Collections.emptyList();
         return new GameSnapshot(currentTick, multiplayer(engine), localTeamId, result,
                 all||groups.contains("map")?mapFacts(engine, me):Collections.emptyMap(),
                 all||groups.contains("environment")?environmentFacts(engine,result):Collections.emptyMap(),
                 all||groups.contains("resources")?teamFacts(me, result,engine):Collections.emptyMap(),
-                all||groups.contains("projectiles")?projectileFacts(engine):Collections.emptyList(),
+                projectiles,
                 all||groups.contains("map")?(x,y)->tileFacts(me,x,y):null,
                 all||groups.contains("map")?(x,y)->fogFacts(me,x,y):null,
                 all||groups.contains("map")?(x,y,movement)->pathFacts(x,y,movement):null);
@@ -121,15 +126,13 @@ public final class GameAdapter {
     public Class<?> unitClass() { return unitClass; }
     public Class<?> orderableClass() { return orderableClass; }
     public Set<String> capabilities() { return Collections.unmodifiableSet(capabilities); }
-    public void clearTransientState(){previousDurability.clear();lastDamagedTick.clear();snapshotMap=null;snapshotEngine=null;pathLayerCache.clear();}
+    public void clearTransientState(){previousDurability.clear();lastDamagedTick.clear();lastDamageAmount.clear();lastDamageSource.clear();snapshotMap=null;snapshotEngine=null;pathLayerCache.clear();}
 
-    /** Delivers through the game's local chat renderer; no network packet is sent. */
     public void localMessage(String message){
         if(message==null||message.trim().isEmpty()||gameNetwork==null||deliverLocalMessage==null)return;
         try{Object engine=host.findEngine(loader),me=engine==null?null:localPlayer.get(engine),network=engine==null?null:gameNetwork.get(engine);if(me==null||network==null)return;String text=message.replace('\n',' ').replace('\r',' ').trim();if(text.length()>240)text=text.substring(0,240);deliverLocalMessage.invoke(network,null,integer(fieldValue(me,"l"),-1),"RWmiao",text);}catch(Throwable ignored){}
     }
 
-    /** Cheap scheduler read: never scans the global unit registry. */
     public int currentTick() {
         try {
             Object engine = host.findEngine(loader);
@@ -137,7 +140,6 @@ public final class GameAdapter {
         } catch (Throwable ignored) { return -1; }
     }
 
-    /** Lightweight type lookup used while the selection action list is being built. */
     public boolean matchesType(Object raw, ScriptDefinition definition) {
         if (raw == null || !unitClass.isInstance(raw)) return false;
         Object type = invokeNoArg(raw, "q");
@@ -155,7 +157,6 @@ public final class GameAdapter {
         } catch (Throwable ignored) { return null; }
     }
 
-    /** Click-only scan used by the multi-selection dialog; never runs from the scheduler. */
     public List<UnitSnapshot> selectedOwnedSameType(Object raw) {
         ArrayList<UnitSnapshot> out=new ArrayList<>();
         try{
@@ -180,7 +181,7 @@ public final class GameAdapter {
                     health=all||catalog||groups.contains("health")||groups.contains("damage"), selection=all||groups.contains("selection"),
                     combat=all||catalog||groups.contains("combat")||groups.contains("weapons"),
                     orders=all||groups.contains("orders")||groups.contains("pathing"), movement=all||groups.contains("movement")||groups.contains("pathing"),
-                    build=all||groups.contains("build")||groups.contains("production"), actions=all||groups.contains("actions")||groups.contains("abilities")||build;
+                    build=all||groups.contains("build")||groups.contains("production"), actions=all||groups.contains("actions")||groups.contains("abilities")||build||groups.contains("production");
             movement=movement||catalog;actions=actions||catalog;
             Object team = fieldValue(raw, "bZ");
             Object target = combat && orderableClass.isInstance(raw) ? fieldValue(raw, "T") : null;
@@ -200,23 +201,22 @@ public final class GameAdapter {
             if (orderKind == null) orderKind = fieldValue(order, "f521a");
             Object orderTarget = fieldValue(order, "h");
             boolean factory = build && factoryClass != null && factoryClass.isInstance(raw);
-            // ce.bq() is the native semantic "is building" predicate (custom.j delegates
-            // it to custom.l.aH). It is cheap and useful
-            // for both UI applicability and Lua filtering, so do not infer it from movement.
             boolean building=bool(invokeNoArg(raw,"bq"));
             int queueSize = factory ? integer(invokeNoArg(raw, "cW"), 0) : 0;
             ArrayList<String> actionIds = new ArrayList<>(), buildableTypes = new ArrayList<>();
-            if(actions){ActionFacts facts=actionFactsCache.get(typeId);if(facts==null){facts=new ActionFacts();collectActions(raw,facts.actionIds,facts.buildableTypes);actionFactsCache.put(typeId,facts);}actionIds.addAll(facts.actionIds);buildableTypes.addAll(facts.buildableTypes);}
+            Map<String,Map<String,Object>> actionDetails = Collections.emptyMap();
+            if(actions){ActionFacts facts=actionFactsCache.get(typeId);if(facts==null){facts=new ActionFacts();collectActions(raw,facts);actionFactsCache.put(typeId,facts);}actionIds.addAll(facts.actionIds);buildableTypes.addAll(facts.buildableTypes);actionDetails=facts.details;}
             LinkedHashMap<String,Object> extras=new LinkedHashMap<>();
+            if(actions&&!actionDetails.isEmpty())extras.put("action_details",new ArrayList<>(actionDetails.values()));
             if(movement) collectMovement(raw,extras,moveSpeed,waypointCount,order);
             if(all||catalog||groups.contains("weapons")) collectWeapons(raw,weaponCount,range,extras);
             if(all||groups.contains("abilities")) collectAbilityDetails(raw,extras);
             if(all||groups.contains("transport")) collectTransport(raw,extras);
-            if(build||all||groups.contains("production")) collectProduction(raw,extras);
+            if(build||all||groups.contains("production")) collectProduction(raw,extras,typeId,actionFactsCache);
             long unitId=longValue(fieldValue(raw,"ej"),-1L);
             if(all||groups.contains("damage")){float durability=decimal(fieldValue(raw,"cw"),0f)+decimal(fieldValue(raw,"cz"),0f);
-                Float old=previousDurability.put(unitId,durability);if(old!=null&&durability+0.001f<old)lastDamagedTick.put(unitId,integer(tickValue(),-1));
-                if(lastDamagedTick.containsKey(unitId))extras.put("last_damaged_tick",lastDamagedTick.get(unitId));}
+                Float old=previousDurability.put(unitId,durability);if(old!=null&&durability+0.001f<old){lastDamagedTick.put(unitId,integer(tickValue(),-1));lastDamageAmount.put(unitId,old-durability);Long source=findRecentDamageSource(unitId);if(source!=null)lastDamageSource.put(unitId,source);}
+                if(lastDamagedTick.containsKey(unitId))extras.put("last_damaged_tick",lastDamagedTick.get(unitId));if(lastDamageAmount.containsKey(unitId))extras.put("last_damage_amount",lastDamageAmount.get(unitId));if(lastDamageSource.containsKey(unitId))extras.put("last_damage_source_id",lastDamageSource.get(unitId));}
             if(all||groups.contains("map")){Integer fog=fogValueAt(me,decimal(fieldValue(raw,"eq"),0f),decimal(fieldValue(raw,"er"),0f));if(fog!=null){extras.put("visible_to_local",fog<5);extras.put("fogged_to_local",fog>=5);extras.put("explored_to_local",fog<10);}}
             return new UnitSnapshot(
                     longValue(fieldValue(raw, "ej"), -1L), typeId, typeName,
@@ -241,18 +241,23 @@ public final class GameAdapter {
         }
     }
 
-    private static final class ActionFacts { final ArrayList<String> actionIds=new ArrayList<>(); final ArrayList<String> buildableTypes=new ArrayList<>(); }
+    private static final class ActionFacts { final ArrayList<String> actionIds=new ArrayList<>(); final ArrayList<String> buildableTypes=new ArrayList<>(); final LinkedHashMap<String,Map<String,Object>> details=new LinkedHashMap<>(); }
 
-    private void collectActions(Object raw, ArrayList<String> actionIds, ArrayList<String> buildableTypes) {
+    private void collectActions(Object raw, ActionFacts facts) {
         Object actions = invokeNoArg(raw, "N");
         if (!(actions instanceof Iterable)) return;
         for (Object action : (Iterable<?>) actions) {
             Object actionId = invokeNoArg(action, "z");
             Object value = fieldValue(actionId, "b");
-            if (value != null) actionIds.add(String.valueOf(value));
+            if (value != null) {
+                String id=String.valueOf(value);facts.actionIds.add(id);
+                LinkedHashMap<String,Object> detail=new LinkedHashMap<>();detail.put("id",id);
+                Object name=invokeNoArg(action,"b"),description=invokeNoArg(action,"a");if(name!=null)detail.put("name",String.valueOf(name));if(description!=null)detail.put("description",String.valueOf(description));putNumber(detail,"cost",invokeNoArg(action,"c"));facts.details.put(id,detail);
+            }
             Object buildType = invokeNoArg(action, "h");
             String type = typeText(buildType, "i");
-            if (type != null && !buildableTypes.contains(type)) buildableTypes.add(type);
+            if (type != null && !facts.buildableTypes.contains(type)) facts.buildableTypes.add(type);
+            if(value!=null&&type!=null){Map<String,Object> detail=facts.details.get(String.valueOf(value));if(detail!=null){detail.put("type_id",type);String name=typeText(buildType,"e");if(name!=null)detail.put("type_name",name);}}
         }
     }
 
@@ -302,6 +307,8 @@ public final class GameAdapter {
             if(!(available instanceof Boolean))available=invoke(action,"a",new Class[]{unitClass},raw);
             if(available instanceof Boolean)a.put("executable",available);
             Object locked=invoke(action,"b",new Class[]{unitClass},raw); if(locked instanceof Boolean)a.put("locked",locked);
+            putNumber(a,"cooldown",invoke(action,"b",new Class[]{unitClass,boolean.class},raw,false));
+            putNumber(a,"cooldown_remaining",invoke(action,"b",new Class[]{unitClass,boolean.class},raw,true));
             details.add(a);
         }
         out.put("abilities",details);
@@ -312,12 +319,13 @@ public final class GameAdapter {
         if(slots!=null&&slots.getClass().isArray())for(int i=0;i<Array.getLength(slots);i++){Long id=objectId(Array.get(slots,i));if(id!=null)ids.add(id);}
         out.put("loaded_unit_ids",ids); out.put("transport_capacity",slots!=null&&slots.getClass().isArray()?Array.getLength(slots):0);
     }
-    private void collectProduction(Object raw,Map<String,Object> out){
+    private void collectProduction(Object raw,Map<String,Object> out,String typeId,Map<String,ActionFacts> actionFactsCache){
         ArrayList<Map<String,Object>> items=new ArrayList<>();if(factoryClass!=null&&factoryClass.isInstance(raw)){
             Object queue=invokeNoArg(raw,"cY");if(queue instanceof Iterable)for(Object q:(Iterable<?>)queue){LinkedHashMap<String,Object> item=new LinkedHashMap<>();
-                putNumber(item,"count",fieldValue(q,"a"));putNumber(item,"progress",fieldValue(q,"b"));putNumber(item,"rate",fieldValue(q,"m"));
+                putNumber(item,"count",fieldValue(q,"a"));putNumber(item,"progress",fieldValue(q,"b"));putNumber(item,"rate",fieldValue(q,"m"));Number progress=number(fieldValue(q,"b")),rate=number(fieldValue(q,"m"));if(progress!=null&&rate!=null&&rate.doubleValue()>0)item.put("remaining_ticks",Math.max(0d,(1d-progress.doubleValue())/rate.doubleValue()));
                 Object actionId=fieldValue(q,"j"),id=fieldValue(actionId,"b");if(id!=null)item.put("action_id",String.valueOf(id));
-                Object type=fieldValue(q,"g");String typeId=typeText(type,"i");if(typeId!=null)item.put("type_id",typeId);
+                Object type=fieldValue(q,"g");String builtTypeId=typeText(type,"i");if(builtTypeId!=null)item.put("type_id",builtTypeId);
+                if(id!=null){ActionFacts facts=actionFactsCache.get(typeId);Map<String,Object> detail=facts==null?null:facts.details.get(String.valueOf(id));if(detail!=null){for(String key:new String[]{"name","description","cost","type_name"})if(detail.containsKey(key))item.put(key,detail.get(key));}}
                 Long target=objectId(fieldValue(q,"i"));if(target!=null)item.put("target_id",target);items.add(item);}}
         out.put("production_items",items);
     }
@@ -349,11 +357,14 @@ public final class GameAdapter {
         out.put("tile_x",tx);out.put("tile_y",ty);boolean inside=tx>=0&&ty>=0&&tx<w&&ty<h;out.put("in_bounds",inside);if(!inside)return out;
         Object layer=fieldValue(snapshotMap,"u"),tile=invoke(layer,"a",new Class[]{int.class,int.class},tx,ty);
         if(tile!=null){
+            Object tileId=firstMetadata(tile,"id","tileId","tile_id","index","typeId","type_id");Object tileName=firstMetadata(tile,"name","tileName","tile_name","displayName","display_name");if(tileId!=null)out.put("tile_id",tileId);if(tileName!=null)out.put("tile_name",String.valueOf(tileName));
             out.put("water",bool(fieldValue(tile,"e")));out.put("water_bridge",bool(fieldValue(tile,"f")));out.put("lava",bool(fieldValue(tile,"g")));
             out.put("cliff",bool(fieldValue(tile,"h")));out.put("resource_pool",bool(fieldValue(tile,"i")));out.put("large_cliff_or_trees",bool(fieldValue(tile,"k")));
             out.put("blocks_buildings",bool(fieldValue(tile,"l")));Number block=number(fieldValue(tile,"j"));out.put("land_blocked",block!=null&&block.intValue()<0);}
         out.putAll(fogFacts(team,x,y));return out;
     }
+
+    private Object firstMetadata(Object object,String... names){for(String name:names){Object value=fieldValue(object,name);if(value==null)value=invokeNoArg(object,name);if(value instanceof String||value instanceof Number)return value;}return null;}
     private Map<String,Object> pathFacts(float x,float y,String movement){
         LinkedHashMap<String,Object> out=new LinkedHashMap<>();String kind=movement==null?"LAND":movement.trim().toUpperCase(java.util.Locale.ROOT);out.put("movement_type",kind);
         if(snapshotMap==null)return out;float scale=decimal(fieldValue(snapshotMap,"r"),0f);if(scale<=0f)return out;
@@ -372,10 +383,22 @@ public final class GameAdapter {
     }
     private Map<String,Object> teamFacts(Object me,List<UnitSnapshot> units,Object engine){
         LinkedHashMap<String,Object> t=new LinkedHashMap<>();if(me==null)return t;
-        t.put("id",integer(fieldValue(me,"l"),-1));t.put("name",string(fieldValue(me,"w")));
+        int localId=integer(fieldValue(me,"l"),-1);
+        t.put("id",localId);t.put("name",string(fieldValue(me,"w")));
         putNumber(t,"funds",fieldValue(me,"p"));putNumber(t,"income_rate",invokeNoArg(me,"q"));putNumber(t,"income_multiplier",invokeNoArg(me,"w"));
         int count=0;for(UnitSnapshot u:units)if(u.relation==0&&!u.dead&&!u.deleted)count++;t.put("unit_count",count);
-        putNumber(t,"unit_cap",fieldValue(engine,"bz"));return t;
+        putNumber(t,"unit_cap",fieldValue(engine,"bz"));
+        LinkedHashMap<Integer,Object> rawTeams=new LinkedHashMap<>();LinkedHashMap<Integer,Integer> counts=new LinkedHashMap<>();
+        rawTeams.put(localId,me);counts.put(localId,0);
+        for(UnitSnapshot u:units){Object rawTeam=fieldValue(u.raw,"bZ");if(rawTeam==null)continue;int id=u.teamId;if(id<0)continue;rawTeams.putIfAbsent(id,rawTeam);counts.put(id,counts.getOrDefault(id,0)+(!u.dead&&!u.deleted?1:0));}
+        ArrayList<Map<String,Object>> teams=new ArrayList<>();for(Map.Entry<Integer,Object> entry:rawTeams.entrySet())teams.add(teamRecord(entry.getKey(),entry.getValue(),counts.getOrDefault(entry.getKey(),0),engine,entry.getKey()==localId));t.put("teams",teams);
+        return t;
+    }
+    private Map<String,Object> teamRecord(int id,Object team,int unitCount,Object engine,boolean local){
+        LinkedHashMap<String,Object> t=new LinkedHashMap<>();t.put("id",id);t.put("name",string(fieldValue(team,"w")));t.put("unit_count",unitCount);t.put("local",local);
+        putNumber(t,"funds",fieldValue(team,"p"));putNumber(t,"income_rate",invokeNoArg(team,"q"));putNumber(t,"income_multiplier",invokeNoArg(team,"w"));
+        if(local)putNumber(t,"unit_cap",fieldValue(engine,"bz"));else{Object cap=firstMetadata(team,"unitCap","unit_cap","cap");if(cap instanceof Number)t.put("unit_cap",cap);}
+        return t;
     }
     private List<Map<String,Object>> projectileFacts(Object engine){
         ArrayList<Map<String,Object>> out=new ArrayList<>();if(allProjectiles==null)return out;
@@ -385,6 +408,15 @@ public final class GameAdapter {
                 putNumber(x,"x",fieldValue(p,"eq"));putNumber(x,"y",fieldValue(p,"er"));putNumber(x,"height",fieldValue(p,"es"));
                 Long source=objectId(fieldValue(p,"j")),target=objectId(fieldValue(p,"l"));if(source!=null)x.put("source_id",source);if(target!=null)x.put("target_id",target);out.add(x);
             }}catch(Throwable ignored){}return out;
+    }
+
+    private Long findRecentDamageSource(long targetId){
+        if(allProjectiles==null||snapshotEngine==null)return null;
+        try{
+            Object list=Modifier.isStatic(allProjectiles.getModifiers())?allProjectiles.get(null):allProjectiles.get(snapshotEngine);
+            if(list instanceof Iterable)for(Object projectile:(Iterable<?>)list){if(projectile==null)continue;Long target=objectId(fieldValue(projectile,"l"));if(target!=null&&target==targetId){Long source=objectId(fieldValue(projectile,"j"));if(source!=null)return source;}}
+        }catch(Throwable ignored){}
+        return null;
     }
 
     private boolean multiplayer(Object engine) {

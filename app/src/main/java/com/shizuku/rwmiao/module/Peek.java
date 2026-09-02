@@ -20,19 +20,6 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_ENEMY_MAP_PINGS;
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_ENEMY_TEAM_CHAT;
 import static com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME;
 
-/**
- * 在原生队伍过滤之前，为房主本地显示其它队伍的聊天消息与地图标记。
- * Shows other teams' chat messages and map pings locally for the host before
- * the native team filter.
- *
- * 原生网络路由和同步命令保持不变；模块只补充房主本地显示。
- * Native network routing and synchronized commands remain unchanged; the
- * module only adds local rendering for the host.
- *
- * 功能关闭时会解除对应 Hook；地图标记文字仅在存在活动标记时挂载绘制 Hook。
- * Disabled features remove their hooks, and the label draw hook exists only
- * while active ping labels are present.
- */
 final class Peek {
     private static final String TAG = "RWmiao";
     private static final long PING_LABEL_DURATION_MS = 8_000L;
@@ -59,6 +46,7 @@ final class Peek {
     private Field serverMode;
     private Field hostTeam;
     private Field playerIndex;
+    private Field teamPlayerName;
     private Field teamGroup;
     private Field commandTeam;
     private Field commandAction;
@@ -108,6 +96,7 @@ final class Peek {
         serverMode = host.findField(networkClass, "D");
         hostTeam = host.findField(networkClass, "A");
         playerIndex = host.findField(teamClass, "l");
+        teamPlayerName = host.findField(teamClass, "w");
         teamGroup = host.findField(teamClass, "s");
 
         executeCommand = commandClass.getDeclaredMethod("h");
@@ -156,11 +145,14 @@ final class Peek {
 
     synchronized void refreshSettings() throws Throwable {
         boolean shouldEnableChat = settingEnabled(KEY_ENEMY_TEAM_CHAT);
-        boolean shouldEnableMapPings = shouldEnableChat && settingEnabled(KEY_ENEMY_MAP_PINGS);
+        HostMutePanel mutePanel = host.hostMutePanelFeature();
+        boolean shouldHookChat = shouldEnableChat
+                || (mutePanel != null && mutePanel.enabled());
+        boolean shouldEnableMapPings = settingEnabled(KEY_ENEMY_MAP_PINGS);
 
-        if (shouldEnableChat) {
+        if (shouldHookChat) {
             ensureChatHook();
-            chatEnabled = true;
+            chatEnabled = shouldEnableChat;
         } else {
             chatEnabled = false;
             XposedInterface.HookHandle handle = chatHook;
@@ -192,9 +184,16 @@ final class Peek {
         if (chatHook != null) return;
         chatHook = host.hookExecutable(receiveChat, chain -> {
             Object network = chain.getThisObject();
+            Object sourceConnection = chain.getArg(0);
+            Object senderTeam = chain.getArg(1);
+            HostMutePanel mutePanel = host.hostMutePanelFeature();
+            if (mutePanel != null
+                    && mutePanel.shouldSuppressChat(network, sourceConnection, senderTeam)) {
+                return null;
+            }
             try {
                 if (chatEnabled) {
-                    maybeShowEnemyMessage(network, chain.getArg(0), chain.getArg(1),
+                    maybeShowEnemyMessage(network, sourceConnection, senderTeam,
                             (String) chain.getArg(2), (String) chain.getArg(3));
                 }
             } catch (Throwable t) {
@@ -242,8 +241,11 @@ final class Peek {
         Object game = host.findEngine(loader);
         if (game == null) return;
         Object network = gameNetwork.get(game);
-        if (network == null || !serverMode.getBoolean(network)
-                || isSameTeam(senderTeam, hostTeam.get(network))) {
+        if (network == null) return;
+        Object localTeam = hostTeam.get(network);
+        if (serverMode.getBoolean(network)) {
+            if (isSameTeam(senderTeam, localTeam)) return;
+        } else if (localTeam == null || isSameTeam(senderTeam, localTeam)) {
             return;
         }
 
@@ -254,6 +256,14 @@ final class Peek {
 
         String actionText = String.valueOf(pingText.invoke(pingAction));
         addPingLabel(point.x, point.y, teamMarker(senderTeam) + actionText);
+        showEnemyPingInChat(network, senderTeam, actionText);
+    }
+
+    private void showEnemyPingInChat(Object network, Object senderTeam, String actionText)
+            throws Throwable {
+        String sender = String.valueOf(teamPlayerName.get(senderTeam));
+        String message = teamMarker(senderTeam) + actionText;
+        deliverMessage.invoke(network, null, playerIndex.getInt(senderTeam), sender, message);
     }
 
     private boolean isSameTeam(Object senderTeam, Object localTeam) throws Throwable {
