@@ -56,6 +56,10 @@ Windows：
 - Lua API 参见 [`docs/SCRIPTING_API.md`](docs/SCRIPTING_API.md)。
 - 贡献规范参见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
+### 许可证
+
+本项目源代码采用 GNU Affero General Public License v3.0（AGPL-3.0-only），详见 [`LICENSE`](LICENSE)。第三方组件及其许可证见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
 ## English
 
 RWmiao is an LSPosed feature module for Rusted Warfare. It detects compatible game packages through runtime class contracts and reuses native command, rendering, and synchronization paths where possible.
@@ -73,3 +77,7 @@ Release builds intentionally contain no repository-owned signing key. Configure 
 The action payload can be rebuilt on Windows with `tools/action-payload/build.ps1`; it uses the checked-in compile-time stubs and does not require a game APK.
 
 See [`docs/SCRIPTING_API.md`](docs/SCRIPTING_API.md) for the Lua API and [`CONTRIBUTING.md`](CONTRIBUTING.md) for repository conventions.
+
+### License
+
+The project source code is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the license and third-party component notices.
