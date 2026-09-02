@@ -1,0 +1,4 @@
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/ic_launcher_monochrome"
+    android:tint="@color/icon_blue_foreground"
+    android:gravity="fill" />

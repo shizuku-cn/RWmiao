@@ -1,0 +1,7 @@
+<resources>
+    <!-- Match the Monet palette slots used by LSPosed. / 匹配 LSPosed 使用的 Monet 调色板槽位。 -->
+    <color name="icon_light_background">@android:color/system_accent1_600</color>
+    <color name="icon_light_foreground">@android:color/system_accent1_0</color>
+    <color name="icon_dark_background">@android:color/system_accent1_200</color>
+    <color name="icon_dark_foreground">@android:color/system_accent1_800</color>
+</resources>

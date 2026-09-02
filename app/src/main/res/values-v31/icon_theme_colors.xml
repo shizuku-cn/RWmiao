@@ -1,0 +1,4 @@
+<resources>
+    <color name="icon_background">@android:color/system_accent1_600</color>
+    <color name="icon_foreground">@android:color/system_accent1_0</color>
+</resources>

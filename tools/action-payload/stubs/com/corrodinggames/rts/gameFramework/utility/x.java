@@ -1,0 +1,1 @@
+package com.corrodinggames.rts.gameFramework.utility; public abstract class x<T> implements java.lang.Iterable<T> { public abstract int size(); }

@@ -1,0 +1,3 @@
+# Add optional default Lua scripts here. / 可在此处添加可选的默认 Lua 脚本。
+# Only Lua files are packaged into Config/Scripts. / 仅打包到 Config/Scripts 的 Lua 文件。
+!.gitignore
