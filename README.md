@@ -64,20 +64,58 @@ Windows：
 
 RWmiao is an LSPosed feature module for Rusted Warfare. It detects compatible game packages through runtime class contracts and reuses native command, rendering, and synchronization paths where possible.
 
+### Source Structure
+
+| Directory | Content |
+|---|---|
+| `app/src/main/java/.../app` | Standalone module application, launcher icon, and activation status |
+| `app/src/main/java/.../config` | Setting keys and default values |
+| `app/src/main/java/.../module` | LSPosed entry point and game process features |
+| `module/drawing` | Combat information rendering |
+| `module/freebuild`, `freeselection` | Free build and free selection |
+| `module/path`, `support/path` | Segmented commands, smart pathfinding, and pathfinding algorithms |
+| `module/lobby`, `network`, `proxy` | Multiplayer lobby, network information, and proxy |
+| `module/script` | Lua automation runtime and native command gateway |
+| `module/smartbuild` | Smart build serialization |
+| `app/src/main/java/.../ui` | Compose settings interface and runtime panel |
+| `app/src/test` | JVM regression tests |
+| `tools/action-payload` | Source code, stubs, and build scripts for target classloader action payloads |
+| `docs` | Stable documentation for users and script authors |
+
 ### Build
 
-Install JDK 17, Android SDK Platform 35, and Android Build Tools 36.x. Before building, set `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) to your Android SDK, or create a local `local.properties` file; it is ignored and must not be committed. Then run:
+Install JDK 17, Android SDK Platform 35, and Android Build Tools 36.x. Before building, set `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) to your Android SDK, or create a local `local.properties` file (this file is ignored by `.gitignore` and must not be committed). 
+
+The repository includes a Gradle Wrapper. You can run it directly:
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
-Release builds intentionally contain no repository-owned signing key. Configure signing securely in your own release environment. The repository excludes proprietary game APKs, signing material, machine caches, and generated APKs.
+Windows:
 
-The action payload can be rebuilt on Windows with `tools/action-payload/build.ps1`; it uses the checked-in compile-time stubs and does not require a game APK.
+```powershell
+.\gradlew.bat testDebugUnitTest assembleDebug
+```
 
-See [`docs/SCRIPTING_API.md`](docs/SCRIPTING_API.md) for the Lua API and [`CONTRIBUTING.md`](CONTRIBUTING.md) for repository conventions.
+Official release builds intentionally contain no developer signing key by default. Release publishers should configure signing securely in their own CI or local environment and must not commit the private keys to the repository.
+
+The pre-built DEX of the action payload is located at `app/src/main/assets/rwmiao_actions.dex`. After modifying `tools/action-payload/src`, execute the following in Windows PowerShell to rebuild it:
+
+```powershell
+.\tools\action-payload\build.ps1
+```
+
+The script locates toolchains via `JAVA_HOME` and `ANDROID_SDK_ROOT` (or `ANDROID_HOME`/`local.properties`), and does not require the original game APK.
+
+### Notes
+
+- The Application ID is kept as `com.shizuku.rwmiao` to maintain compatibility with existing installations.
+- LSPosed uses dynamic scopes; you need to enable the module for the target game package within the manager.
+- The repository excludes proprietary game APKs, signing material, machine caches, and build artifacts.
+- See [`docs/SCRIPTING_API.md`](docs/SCRIPTING_API.md) for the Lua API.
+- See [`CONTRIBUTING.md`](CONTRIBUTING.md) for repository contribution guidelines.
 
 ### License
 
-The project source code is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the license and third-party component notices.
+The project source code is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See [`LICENSE`](LICENSE) for details. Third-party components and their licenses are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
