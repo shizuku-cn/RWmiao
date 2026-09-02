@@ -26,7 +26,7 @@ RWmiao 是面向《铁锈战争》的 LSPosed 功能模块。项目通过运行�
 
 ### 构建
 
-需要 JDK 17、Android SDK Platform 35，以及 Android Build Tools 36.x。仓库包含 Gradle Wrapper，可直接执行：
+需要 JDK 17、Android SDK Platform 35，以及 Android Build Tools 36.x。构建前请设置 `ANDROID_SDK_ROOT`（或 `ANDROID_HOME`）指向 Android SDK；也可以在本机生成 `local.properties`，该文件已被 `.gitignore` 忽略，不能提交。仓库包含 Gradle Wrapper，可直接执行：
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
@@ -66,7 +66,7 @@ RWmiao is an LSPosed feature module for Rusted Warfare. It detects compatible ga
 
 ### Build
 
-Install JDK 17, Android SDK Platform 35, and Android Build Tools 36.x, then run:
+Install JDK 17, Android SDK Platform 35, and Android Build Tools 36.x. Before building, set `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) to your Android SDK, or create a local `local.properties` file; it is ignored and must not be committed. Then run:
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
