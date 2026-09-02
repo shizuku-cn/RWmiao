@@ -1,4 +1,6 @@
-# RWmiao
+<p align="center">
+  <img width="1024" alt="Rust Miao Development Environment product preview" src="https://github.com/user-attachments/assets/43b8573e-dc56-4cfe-9064-808e2548c0cb" />
+</p>
 
 [中文](#中文) · [English](#english)
 
