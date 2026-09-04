@@ -24,7 +24,7 @@ import static com.shizuku.rwmiao.config.SettingsContract.KEY_SEGMENT_COMMAND;
 
 public final class SegmentCommands {
     private static final String TAG = "RWmiao";
-    private static final String[] ORDER_TYPE_FIELDS = {"a", "f521a"};
+    private static final String[] ORDER_TYPE_FIELDS = {"a"};
 
     private final RWmiaoModule host;
     private final ClassLoader loader;
@@ -402,8 +402,17 @@ public final class SegmentCommands {
     }
 
     private void hookTerminalOrders(Class<?> commandClass) {
-        for (Method method : commandClass.getDeclaredMethods()) {
-            if (!isOrderSetterCandidate(method)) continue;
+        java.util.LinkedHashSet<Method> candidates = new java.util.LinkedHashSet<>();
+        String[] names = {"a", "b", "c", "d", "e", "f"};
+        for (String name : names) {
+            addIfPresent(candidates, exactMethod(commandClass, name, targetUnitClass));
+            addIfPresent(candidates, exactMethod(commandClass, name, float.class, float.class));
+            addIfPresent(candidates, exactMethod(
+                    commandClass, name, float.class, float.class, boolean.class));
+            addIfPresent(candidates, exactMethod(
+                    commandClass, name, float.class, float.class, buildTypeClass, int.class));
+        }
+        for (Method method : candidates) {
             method.setAccessible(true);
             hooks.add(host.hookExecutable(method, chain -> {
                 Object result = chain.proceed();
@@ -422,28 +431,8 @@ public final class SegmentCommands {
         }
     }
 
-    private boolean isOrderSetterCandidate(Method method) {
-        if (method.getReturnType() != void.class || method.getParameterCount() == 0) {
-            return false;
-        }
-        String name = method.getName();
-        if (!("a".equals(name) || "b".equals(name) || "c".equals(name)
-                || "d".equals(name) || "e".equals(name) || "f".equals(name))) {
-            return false;
-        }
-        Class<?>[] p = method.getParameterTypes();
-        if (p.length == 1) {
-            return p[0].getName().equals(host.target("game.units.ce"));
-        }
-        if (p.length == 2) {
-            return p[0] == float.class && p[1] == float.class;
-        }
-        if (p.length == 3) {
-            return p[0] == float.class && p[1] == float.class && p[2] == boolean.class;
-        }
-        return p.length == 4 && p[0] == float.class && p[1] == float.class
-                && p[2].getName().equals(host.target("game.units.el"))
-                && p[3] == int.class;
+    private static void addIfPresent(java.util.Set<Method> methods, Method method) {
+        if (method != null && method.getReturnType() == void.class) methods.add(method);
     }
 
     void refreshSettings() {
@@ -1279,26 +1268,10 @@ public final class SegmentCommands {
         Method cached = exactMethods.get(key);
         if (cached != null) return cached;
         if (missingExactMethods.contains(key)) return null;
-        Class<?> current = type;
-        while (current != null) {
-            for (Method method : current.getDeclaredMethods()) {
-                if (!method.getName().equals(name)
-                        || method.getParameterCount() != parameters.length) continue;
-                Class<?>[] actual = method.getParameterTypes();
-                boolean exact = true;
-                for (int i = 0; i < actual.length; i++) {
-                    if (actual[i] != parameters[i]) {
-                        exact = false;
-                        break;
-                    }
-                }
-                if (exact) {
-                    method.setAccessible(true);
-                    exactMethods.putIfAbsent(key, method);
-                    return method;
-                }
-            }
-            current = current.getSuperclass();
+        Method method = host.findExactCompatibleMethod(type, name, parameters);
+        if (method != null) {
+            exactMethods.putIfAbsent(key, method);
+            return method;
         }
         missingExactMethods.add(key);
         return null;

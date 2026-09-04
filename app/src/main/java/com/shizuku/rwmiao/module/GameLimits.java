@@ -118,9 +118,9 @@ public final class GameLimits {
         nativeOptionConstructor = gbClass.getDeclaredConstructor(
                 String.class, String.class, Integer.class);
         nativeOptionConstructor.setAccessible(true);
-        nativeValueField = findFieldAny(gbClass, "a", "f189a");
+        nativeValueField = findFieldAny(gbClass, "a");
         Class<?> gaClass = loader.loadClass(host.target("appFramework.ga"));
-        nativeItemsField = findFieldAny(gaClass, "a", "f188a");
+        nativeItemsField = findFieldAny(gaClass, "a");
 
         spawnDropdownHook = host.hookExecutable(spawnSetup, chain -> {
             Object result = chain.proceed();
@@ -250,7 +250,7 @@ public final class GameLimits {
     private void installUnitCapHooks() throws Throwable {
         Class<?> gameClass = loader.loadClass(host.target("game.i"));
         gameStartHook = host.hookExecutable(
-                gameClass.getDeclaredMethod("a", boolean.class, boolean.class, int.class),
+                host.findCompatibleMethod(gameClass, "a", boolean.class, boolean.class, int.class),
                 chain -> {
                     int cap = readUnitCap();
                     saveAndApplyNativeUnitCap(cap);

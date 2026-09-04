@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
-import android.os.Build
 import android.os.Bundle
 import android.view.Window
 import android.view.WindowManager
@@ -57,12 +56,16 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.shizuku.rwmiao.BuildConfig
+import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_COLOR_MODE
 import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_DYNAMIC_COLOR
 import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_THEME_MODE
 import com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_DARK
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_LIGHT
+import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_SYSTEM
 import com.shizuku.rwmiao.module.RoomOptions as RoomOptionsFeature
+import com.shizuku.rwmiao.ui.support.moduleColorScheme
+import com.shizuku.rwmiao.ui.support.readModuleColorMode
 
 private class ApplyRoomOptionsException(cause: Throwable) : RuntimeException(cause)
 
@@ -551,21 +554,15 @@ private fun RoomOptionsTheme(activity: Activity, content: @Composable () -> Unit
     }
     val preferences: SharedPreferences = if (
         localPreferences.contains(KEY_UI_THEME_MODE) ||
+        localPreferences.contains(KEY_UI_COLOR_MODE) ||
         localPreferences.contains(KEY_UI_DYNAMIC_COLOR)
     ) localPreferences else modulePreferences
-    val dark = when (preferences.getInt(KEY_UI_THEME_MODE, 0)) {
+    val dark = when (preferences.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM)) {
         UI_THEME_LIGHT -> false
         UI_THEME_DARK -> true
         else -> androidx.compose.foundation.isSystemInDarkTheme()
     }
-    val dynamic = preferences.getBoolean(KEY_UI_DYNAMIC_COLOR, true) &&
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val scheme = if (dynamic) {
-        if (dark) androidx.compose.material3.dynamicDarkColorScheme(activity)
-        else androidx.compose.material3.dynamicLightColorScheme(activity)
-    } else {
-        if (dark) androidx.compose.material3.darkColorScheme() else androidx.compose.material3.lightColorScheme()
-    }
+    val scheme = moduleColorScheme(preferences.readModuleColorMode(), dark, activity)
     MaterialTheme(colorScheme = scheme, content = content)
 }
 

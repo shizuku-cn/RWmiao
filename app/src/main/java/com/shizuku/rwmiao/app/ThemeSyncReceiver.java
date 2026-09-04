@@ -20,11 +20,11 @@ public final class ThemeSyncReceiver extends BroadcastReceiver {
                 SettingsContract.UI_THEME_SYSTEM);
         int colorMode = intent.getIntExtra(
                 IconThemeProvider.ARG_COLOR_MODE,
-                intent.getBooleanExtra(IconThemeProvider.ARG_DYNAMIC_COLOR, true)
+                intent.getBooleanExtra(IconThemeProvider.ARG_DYNAMIC_COLOR, false)
                         ? SettingsContract.UI_COLOR_DYNAMIC
                         : SettingsContract.UI_COLOR_DEFAULT);
         boolean dynamicColor = intent.getBooleanExtra(
-                IconThemeProvider.ARG_DYNAMIC_COLOR, true);
+                IconThemeProvider.ARG_DYNAMIC_COLOR, false);
         IconThemeProvider.applyTheme(context, mode, colorMode, dynamicColor);
     }
 }

@@ -54,7 +54,9 @@ final class FactoryExitThrough {
     }
 
     synchronized void refreshSettings() {
-        if (!host.selectionActionEnabled(KEY_FACTORY_EXIT_THROUGH)) {
+        MotherRally motherRally = host.motherRallyFeature();
+        boolean motherRallyEnabled = motherRally != null && motherRally.enabled();
+        if (!enabled() && !motherRallyEnabled) {
             unhook();
             return;
         }
@@ -74,6 +76,10 @@ final class FactoryExitThrough {
         if (productionQueue == null || result == null) return;
         Object producer = host.findFieldValue(productionQueue, "a");
         if (producer == null || !factoryClass.isInstance(producer)) return;
+        if (!enabled()) {
+            MotherRally motherRally = host.motherRallyFeature();
+            if (motherRally == null || !motherRally.isApplicable(producer)) return;
+        }
         Object rallyValue = host.findFieldValue(productionQueue, "b");
         if (!(rallyValue instanceof PointF)) return;
         PointF rally = (PointF) rallyValue;
@@ -94,33 +100,17 @@ final class FactoryExitThrough {
         addUnit.invoke(command, result);
     }
 
+    private boolean enabled() {
+        return host.selectionActionEnabled(KEY_FACTORY_EXIT_THROUGH);
+    }
+
     private void setBoolean(Object object, String name, boolean value) throws Throwable {
         java.lang.reflect.Field field = host.findField(object.getClass(), name);
         if (field.getType() == boolean.class) field.setBoolean(object, value);
     }
 
     private Method exactMethod(Class<?> type, String name, Class<?>... parameters) {
-        Class<?> current = type;
-        while (current != null) {
-            for (Method method : current.getDeclaredMethods()) {
-                if (!method.getName().equals(name)
-                        || method.getParameterCount() != parameters.length) continue;
-                Class<?>[] actual = method.getParameterTypes();
-                boolean match = true;
-                for (int i = 0; i < actual.length; i++) {
-                    if (actual[i] != parameters[i]) {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match) {
-                    method.setAccessible(true);
-                    return method;
-                }
-            }
-            current = current.getSuperclass();
-        }
-        return null;
+        return host.findExactCompatibleMethod(type, name, parameters);
     }
 
     private void unhook() {

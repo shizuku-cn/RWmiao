@@ -9,6 +9,7 @@ final class MotherRally {
     private final ClassLoader loader;
     private Class<?> producerInterface;
     private Class<?> productionActionClass;
+    private Class<?> customUnitClass;
 
     MotherRally(RWmiaoModule host, ClassLoader loader) {
         this.host = host;
@@ -18,9 +19,12 @@ final class MotherRally {
     void install() throws Throwable {
         producerInterface = loader.loadClass(host.target("game.units.d.s"));
         productionActionClass = loader.loadClass(host.target("game.units.a.w"));
+        customUnitClass = loader.loadClass(host.target("game.units.custom.j"));
     }
 
     void refreshSettings() {
+        FactoryExitThrough dispatcher = host.factoryExitThroughFeature();
+        if (dispatcher != null) dispatcher.refreshSettings();
     }
 
     boolean enabled() {
@@ -35,7 +39,7 @@ final class MotherRally {
     }
 
     private boolean ensureRallyCapability(Object unit) {
-        if (unit.getClass().getName().equals(host.target("game.units.custom.j"))) {
+        if (customUnitClass.isInstance(unit)) {
             try {
                 Object definition = host.findFieldValue(unit, "x");
                 if (definition == null) return false;

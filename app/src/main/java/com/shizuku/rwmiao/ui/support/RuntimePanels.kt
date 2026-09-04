@@ -48,10 +48,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -77,13 +73,12 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import android.os.Build
 import com.shizuku.rwmiao.BuildConfig
-import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_DYNAMIC_COLOR
 import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_THEME_MODE
 import com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_DARK
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_LIGHT
+import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_SYSTEM
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -521,18 +516,12 @@ private fun RuntimeTheme(activity: Activity, content: @Composable () -> Unit) {
         moduleContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
     val systemDark = isSystemInDarkTheme()
-    val dark = when (preferences.getInt(KEY_UI_THEME_MODE, 0)) {
+    val dark = when (preferences.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM)) {
         UI_THEME_LIGHT -> false
         UI_THEME_DARK -> true
         else -> systemDark
     }
-    val dynamic = preferences.getBoolean(KEY_UI_DYNAMIC_COLOR, true) &&
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val scheme = if (dynamic) {
-        if (dark) dynamicDarkColorScheme(activity) else dynamicLightColorScheme(activity)
-    } else {
-        if (dark) darkColorScheme() else lightColorScheme()
-    }
+    val scheme = moduleColorScheme(preferences.readModuleColorMode(), dark, activity)
     MaterialTheme(colorScheme = scheme, content = content)
 }
 

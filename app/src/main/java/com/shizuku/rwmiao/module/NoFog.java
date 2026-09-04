@@ -20,7 +20,8 @@ final class NoFog {
 
     void install() throws Throwable {
         Class<?> gameClass = loader.loadClass(host.target("game.i"));
-        startGame = gameClass.getDeclaredMethod("a", boolean.class, boolean.class, int.class);
+        startGame = host.findCompatibleMethod(
+                gameClass, "a", boolean.class, boolean.class, int.class);
         refreshSettings();
     }
 
@@ -51,7 +52,7 @@ final class NoFog {
         host.findField(map.getClass(), "G").setBoolean(map, false);
 
         Class<?> teamClass = loader.loadClass(host.target("game.p"));
-        Method teams = teamClass.getDeclaredMethod("c");
+        Method teams = host.findCompatibleMethod(teamClass, "c");
         teams.setAccessible(true);
         Object value = teams.invoke(null);
         if (!(value instanceof Iterable)) return;

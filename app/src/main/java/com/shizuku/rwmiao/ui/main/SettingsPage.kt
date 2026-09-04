@@ -21,6 +21,7 @@ import com.shizuku.rwmiao.config.SettingsContract.*
 import com.shizuku.rwmiao.app.LauncherIconController
 import com.shizuku.rwmiao.module.RWmiaoModule
 import com.shizuku.rwmiao.module.script.ScriptManager
+import com.shizuku.rwmiao.ui.support.readModuleColorMode
 
 class SettingsPage(
     internal val hostActivity: Activity,
@@ -267,18 +268,9 @@ internal data class UiPreferences(
 
     companion object {
         fun load(prefs: android.content.SharedPreferences): UiPreferences {
-            val colorMode = if (prefs.contains(KEY_UI_COLOR_MODE)) {
-                prefs.getInt(KEY_UI_COLOR_MODE, UI_COLOR_DEFAULT)
-            } else if (prefs.contains(KEY_UI_DYNAMIC_COLOR) &&
-                prefs.getBoolean(KEY_UI_DYNAMIC_COLOR, false)
-            ) {
-                UI_COLOR_DYNAMIC
-            } else {
-                UI_COLOR_DEFAULT
-            }
             return UiPreferences(
                 themeMode = prefs.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM),
-                colorMode = colorMode.coerceIn(UI_COLOR_DEFAULT, UI_COLOR_CYAN),
+                colorMode = prefs.readModuleColorMode(),
                 autoCheckUpdate = prefs.getBoolean(KEY_UI_AUTO_CHECK_UPDATE, false)
             )
         }

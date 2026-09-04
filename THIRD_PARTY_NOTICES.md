@@ -20,6 +20,13 @@ This project includes or uses the following third-party components. Preserve the
 - License: Apache License 2.0
 - Usage: packaged Android implementation dependency.
 
+## LuaJ
+
+- Upstream: <https://sourceforge.net/projects/luaj/>
+- Version: `3.0.1`
+- License: MIT License
+- Usage: packaged Lua runtime dependency.
+
 ## Apache License 2.0
 
 The Apache License 2.0 text is available at <https://www.apache.org/licenses/LICENSE-2.0>. The upstream repositories linked above contain the corresponding notices and license files.

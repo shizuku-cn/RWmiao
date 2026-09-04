@@ -53,7 +53,7 @@ public final class GameAdapter {
         localPlayer = host.findField(engine, "bp");
         tick = host.findField(engine, "bu");
         Field networkField=null;Method delivery=null;
-        try{Class<?> networkClass=loader.loadClass(host.target("gameFramework.j.ae"));Class<?> connectionClass=loader.loadClass(host.target("gameFramework.j.c"));networkField=host.findField(engine,"bU");delivery=networkClass.getDeclaredMethod("a",connectionClass,int.class,String.class,String.class);delivery.setAccessible(true);}catch(Throwable ignored){}
+        try{Class<?> networkClass=loader.loadClass(host.target("gameFramework.j.ae"));Class<?> connectionClass=loader.loadClass(host.target("gameFramework.j.c"));networkField=host.findField(engine,"bU");delivery=host.findCompatibleMethod(networkClass,"a",connectionClass,int.class,String.class,String.class);}catch(Throwable ignored){}
         gameNetwork=networkField;deliverLocalMessage=delivery;
         Field registry;
         try { registry = host.findField(unitClass, "bG"); }
@@ -198,7 +198,6 @@ public final class GameAdapter {
             int waypointCount = orders && orderableClass.isInstance(raw) ? integer(fieldValue(raw, "O"), 0) : 0;
             Object order = orders && orderableClass.isInstance(raw) ? invokeNoArg(raw, "ap") : null;
             Object orderKind = fieldValue(order, "a");
-            if (orderKind == null) orderKind = fieldValue(order, "f521a");
             Object orderTarget = fieldValue(order, "h");
             boolean factory = build && factoryClass != null && factoryClass.isInstance(raw);
             boolean building=bool(invokeNoArg(raw,"bq"));
@@ -450,8 +449,7 @@ public final class GameAdapter {
 
     private Object invoke(Object object,String name,Class<?>[] types,Object...args){
         if(object==null)return null;StringBuilder keyBuilder=new StringBuilder(object.getClass().getName()).append('#').append(name);for(Class<?> t:types)keyBuilder.append(':').append(t.getName());String key=keyBuilder.toString();
-        try{Method cached=argumentMethodCache.get(key);if(cached!=null)return cached.invoke(object,args);Class<?> c=object.getClass();
-            while(c!=null)try{Method m=c.getDeclaredMethod(name,types);m.setAccessible(true);argumentMethodCache.put(key,m);return m.invoke(object,args);}catch(NoSuchMethodException e){c=c.getSuperclass();}
+        try{Method cached=argumentMethodCache.get(key);if(cached!=null)return cached.invoke(object,args);Method m=host.findCompatibleMethod(object.getClass(),name,types);if(m!=null){argumentMethodCache.put(key,m);return m.invoke(object,args);}
         }catch(Throwable ignored){}return null;
     }
     private Object tickValue(){try{Object engine=host.findEngine(loader);return engine==null?null:tick.get(engine);}catch(Throwable ignored){return null;}}

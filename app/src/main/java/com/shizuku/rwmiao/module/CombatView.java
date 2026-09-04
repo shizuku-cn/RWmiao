@@ -368,9 +368,9 @@ final class CombatView {
         final Field currentTarget = host.findField(battleUnit, "T");
         final Field orders = host.findField(battleUnit, "Q");
         final Field orderCount = host.findField(battleUnit, "O");
-        final Field orderType = optionalField(waypointClass, "f521a");
+        final Field orderType = optionalField(waypointClass, "a");
         final Field orderTarget = optionalField(waypointClass, "h");
-        final Method allUnits = unitClass.getDeclaredMethod("bn");
+        final Method allUnits = host.findCompatibleMethod(unitClass, "bn");
         final Method mapWidth = optionalMethod(allMapClass(), "f");
         final Method mapHeight = optionalMethod(allMapClass(), "g");
         final Method setCamera = host.findCompatibleMethod(engineClass, "a",

@@ -77,10 +77,10 @@ public final class IconThemeProvider extends ContentProvider {
                 : extras.getInt(ARG_THEME_MODE, SettingsContract.UI_THEME_SYSTEM);
         int colorMode = extras != null && extras.containsKey(ARG_COLOR_MODE)
                 ? extras.getInt(ARG_COLOR_MODE, SettingsContract.UI_COLOR_DEFAULT)
-                : (extras == null || extras.getBoolean(ARG_DYNAMIC_COLOR, true)
+                : (extras != null && extras.getBoolean(ARG_DYNAMIC_COLOR, false)
                         ? SettingsContract.UI_COLOR_DYNAMIC
                         : SettingsContract.UI_COLOR_DEFAULT);
-        boolean dynamicColor = extras == null || extras.getBoolean(ARG_DYNAMIC_COLOR, true);
+        boolean dynamicColor = extras != null && extras.getBoolean(ARG_DYNAMIC_COLOR, false);
         applyTheme(context, mode, colorMode, dynamicColor);
         return Bundle.EMPTY;
     }

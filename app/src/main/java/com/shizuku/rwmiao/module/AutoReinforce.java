@@ -1099,18 +1099,31 @@ final class AutoReinforce {
     }
 
     private Method findPreviewDrawMethod(Class<?> drawer, Class<?> specType, Class<?> teamType) {
+        Method mapped = host.findCompatibleMethod(drawer, "a", specType,
+                float.class, float.class, float.class, teamType,
+                float.class, float.class, boolean.class, boolean.class,
+                int.class, boolean.class, Object.class);
+        if (isPreviewDrawMethod(mapped, specType, teamType)) return mapped;
+
+        Method candidate = null;
         for (Method method : drawer.getDeclaredMethods()) {
-            Class<?>[] p = method.getParameterTypes();
-            if (!"a".equals(method.getName()) || !Modifier.isStatic(method.getModifiers())
-                    || p.length != 12 || !p[0].isAssignableFrom(specType)
-                    || p[1] != float.class || p[2] != float.class || p[3] != float.class
-                    || !p[4].isAssignableFrom(teamType) || p[5] != float.class || p[6] != float.class
-                    || p[7] != boolean.class || p[8] != boolean.class || p[9] != int.class
-                    || p[10] != boolean.class || p[11].isPrimitive()) continue;
-            method.setAccessible(true);
-            return method;
+            if (!isPreviewDrawMethod(method, specType, teamType)) continue;
+            if (candidate != null) return null;
+            candidate = method;
         }
-        return null;
+        if (candidate != null) candidate.setAccessible(true);
+        return candidate;
+    }
+
+    private boolean isPreviewDrawMethod(Method method, Class<?> specType, Class<?> teamType) {
+        if (method == null) return false;
+        Class<?>[] p = method.getParameterTypes();
+        return Modifier.isStatic(method.getModifiers())
+                && p.length == 12 && p[0].isAssignableFrom(specType)
+                && p[1] == float.class && p[2] == float.class && p[3] == float.class
+                && p[4].isAssignableFrom(teamType) && p[5] == float.class && p[6] == float.class
+                && p[7] == boolean.class && p[8] == boolean.class && p[9] == int.class
+                && p[10] == boolean.class && !p[11].isPrimitive();
     }
 
     private void runUnweighted() throws Throwable {
@@ -1319,17 +1332,25 @@ final class AutoReinforce {
     }
 
     private Method findCommandActionMethod(Class<?> type, Class<?> actionType) {
+        Method mapped = host.findCompatibleMethod(type, "a", actionType, Object.class);
+        if (isCommandActionMethod(mapped, actionType)) return mapped;
+        Method candidate = null;
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             for (Method method : current.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if ("a".equals(method.getName()) && parameters.length == 2
-                        && parameters[0].isAssignableFrom(actionType) && !parameters[1].isPrimitive()) {
-                    method.setAccessible(true);
-                    return method;
-                }
+                if (!isCommandActionMethod(method, actionType)) continue;
+                if (candidate != null) return null;
+                candidate = method;
             }
         }
-        return null;
+        if (candidate != null) candidate.setAccessible(true);
+        return candidate;
+    }
+
+    private boolean isCommandActionMethod(Method method, Class<?> actionType) {
+        if (method == null) return false;
+        Class<?>[] parameters = method.getParameterTypes();
+        return parameters.length == 2 && parameters[0].isAssignableFrom(actionType)
+                && !parameters[1].isPrimitive();
     }
 
     private void dismissPopup(boolean keepDismissedKey) {

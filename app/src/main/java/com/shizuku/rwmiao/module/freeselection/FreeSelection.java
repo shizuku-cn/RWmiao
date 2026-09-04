@@ -80,7 +80,7 @@ public final class FreeSelection {
         if (touchMethod == null) throw new NoSuchMethodException("appFramework.en.a(MotionEvent)");
         inputMethod = host.findCompatibleMethod(runtime.uiClass, "a", float.class);
         if (inputMethod == null) throw new NoSuchMethodException("selection input method");
-        drawMethod = runtime.uiClass.getDeclaredMethod("b", float.class);
+        drawMethod = host.findCompatibleMethod(runtime.uiClass, "b", float.class);
         drawMethod.setAccessible(true);
         host.addGameResyncListener(this::onGameResync);
         refreshSettings();
@@ -570,7 +570,7 @@ public final class FreeSelection {
         final Field x = host.findField(unit, "eq");
         final Field y = host.findField(unit, "er");
         final Field groundOffset = optionalField(unit, "es");
-        final Method allUnits = unit.getDeclaredMethod("bn");
+        final Method allUnits = host.findCompatibleMethod(unit, "bn");
         final Method mapActive = host.findCompatibleMethod(uiClass, "a",
                 float.class, float.class);
         final Method cancelAction = host.findNoArgMethod(uiClass, "e");

@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -55,8 +57,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.shizuku.rwmiao.BuildConfig
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_DARK
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_LIGHT
@@ -465,6 +467,9 @@ internal fun Preferences(
                 }
             }
         }
+        item {
+            DeveloperAndOpenSourceSection()
+        }
     }
 
     when (networkInfoDialog) {
@@ -488,6 +493,130 @@ internal fun Preferences(
                 page.refreshRuntimeHooks()
                 proxyDialog = false
             }
+        )
+    }
+}
+
+@Composable
+private fun DeveloperAndOpenSourceSection() {
+    val context = LocalContext.current
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 0.dp
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "开发人员",
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            DeveloperRow(
+                name = "Shizuku",
+                contribution = "主要开发",
+                bilibiliUrl = SHIZUKU_BILIBILI_URL
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            DeveloperRow(
+                name = "YumeLotus",
+                contribution = "维护"
+            )
+
+            Text(
+                "开源项目使用声明",
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            OpenSourceProjectRow(
+                name = "libxposed API",
+                url = LIBXPOSED_API_URL,
+                context = context
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            OpenSourceProjectRow(
+                name = "QuadFlask colorpicker",
+                url = QUADFLASK_COLORPICKER_URL,
+                context = context
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            OpenSourceProjectRow(
+                name = "LuaJ",
+                url = LUAJ_PROJECT_URL,
+                context = context
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun DeveloperRow(
+    name: String,
+    contribution: String,
+    bilibiliUrl: String? = null
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 28.dp, top = 10.dp, end = 12.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                contribution,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (bilibiliUrl != null) {
+            FilledTonalButton(
+                onClick = { openModuleLink(context, bilibiliUrl) }
+            ) {
+                Text("BiliBili")
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenSourceProjectRow(
+    name: String,
+    url: String,
+    context: android.content.Context
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { openModuleLink(context, url) }
+            .padding(start = 28.dp, top = 9.dp, end = 16.dp, bottom = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            url,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall
         )
     }
 }

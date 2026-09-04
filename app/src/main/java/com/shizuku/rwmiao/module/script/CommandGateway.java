@@ -228,14 +228,8 @@ public final class CommandGateway {
         return method == null ? null : method.invoke(object);
     }
 
-    private static Method exact(Class<?> type, String name, Class<?>... parameters) {
-        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-            try {
-                Method method = current.getDeclaredMethod(name, parameters);
-                method.setAccessible(true);
-                return method;
-            } catch (NoSuchMethodException ignored) { }
-        }
-        return null;
+    private Method exact(Class<?> type, String name, Class<?>... parameters) {
+        Method method = host.findExactCompatibleMethod(type, name, parameters);
+        return method != null ? method : host.findCompatibleMethod(type, name, parameters);
     }
 }
