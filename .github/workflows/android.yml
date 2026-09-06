@@ -18,7 +18,7 @@ jobs:
           java-version: '17'
           cache: gradle
       - name: Build and test / 构建并测试
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        run: bash ./gradlew --no-daemon testDebugUnitTest assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: RWmiao-v0.17-debug
