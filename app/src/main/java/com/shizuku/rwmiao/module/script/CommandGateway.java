@@ -8,7 +8,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
 
@@ -23,16 +25,18 @@ public final class CommandGateway {
     private final Class<?> actionIdClass;
     private final Method resolveActionId;
     private final AtomicLong ids = new AtomicLong();
+    private final Map<String,Map<Long,SteerState>> steering = new HashMap<>();
     private int issuedThisCallback;
 
     public static final class Result {
         public final boolean accepted;
         public final String reason;
         public final long commandId;
-        private Result(boolean accepted, String reason, long commandId) {
-            this.accepted = accepted; this.reason = reason; this.commandId = commandId;
+        public final boolean issued;
+        private Result(boolean accepted, String reason, long commandId, boolean issued) {
+            this.accepted = accepted; this.reason = reason; this.commandId = commandId; this.issued=issued;
         }
-        static Result reject(String reason) { return new Result(false, reason, -1L); }
+        static Result reject(String reason) { return new Result(false, reason, -1L, false); }
     }
 
     public CommandGateway(RWmiaoModule host, ClassLoader loader, GameAdapter adapter) throws Throwable {
@@ -49,11 +53,39 @@ public final class CommandGateway {
     }
 
     public void beginCallback() { issuedThisCallback = 0; }
+    public void clearTransientState(){steering.clear();}
     public Set<String> capabilities() { return adapter.capabilities(); }
+    public Map<String,Object> fireSolution(GameSnapshot snapshot,long attackerId,long targetId,int weaponIndex){return adapter.fireSolution(snapshot,attackerId,targetId,weaponIndex);}
 
     public Result move(String scriptId, GameSnapshot snapshot, List<Long> unitIds,
                        float x, float y, boolean append) {
         return pointCommand(scriptId, snapshot, unitIds, "move", "a", x, y, append);
+    }
+
+    public Result steer(String scriptId,GameSnapshot snapshot,List<Long> unitIds,float x,float y,
+                        float deadband,int refreshTicks){
+        List<UnitSnapshot> units=owned(snapshot,unitIds);
+        if(units.isEmpty())return Result.reject("没有可控制的己方单位");
+        float threshold=Math.max(0f,Math.min(200f,deadband)),limit=threshold*threshold;
+        int refresh=Math.max(1,Math.min(600,refreshTicks));
+        Map<Long,SteerState> script=steering.computeIfAbsent(scriptId,ignored->new HashMap<>());
+        ArrayList<Long> due=new ArrayList<>();
+        for(UnitSnapshot unit:units){
+            SteerState old=script.get(unit.id);int age=old==null?Integer.MAX_VALUE:snapshot.tick-old.tick;
+            float dx=old==null?Float.MAX_VALUE:x-old.x,dy=old==null?Float.MAX_VALUE:y-old.y;
+            if(old==null||age<0||age>=refresh||dx*dx+dy*dy>limit)due.add(unit.id);
+        }
+        if(due.isEmpty())return new Result(true,null,-1L,false);
+        Result result=pointCommand(scriptId,snapshot,due,"move","a",x,y,false);
+        if(result.accepted)for(Long id:due)script.put(id,new SteerState(x,y,snapshot.tick));
+        return result;
+    }
+
+    public Result moveKeepTarget(String scriptId,GameSnapshot snapshot,List<Long> unitIds,float x,float y,
+                                 long targetId,float deadband,int refreshTicks){
+        UnitSnapshot target=snapshot.get(targetId);
+        if(target==null||target.dead||target.deleted)return Result.reject("目标不存在");
+        return steer(scriptId,snapshot,unitIds,x,y,deadband,refreshTicks);
     }
 
     public Result attackMove(String scriptId, GameSnapshot snapshot, List<Long> unitIds,
@@ -120,7 +152,7 @@ public final class CommandGateway {
             if (setter == null) return Result.reject("当前版本不支持 build");
             setter.invoke(command, x, y, buildType, variant);
             attach(command, units);
-            return accepted();
+            Result result=accepted();adapter.recordScriptCommand(scriptId,units,"build",null,x,y,result.commandId);return result;
         } catch (Throwable t) { return Result.reject("build 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -134,7 +166,7 @@ public final class CommandGateway {
             if (!result.accepted) return result;
             last = result.commandId;
         }
-        return new Result(true, null, last);
+        return new Result(true, null, last, last>=0);
     }
 
     public Result action(String scriptId, GameSnapshot snapshot, List<Long> unitIds,
@@ -153,7 +185,7 @@ public final class CommandGateway {
             PointF point = x == null || y == null ? null : new PointF(x, y);
             setter.invoke(command, id, point);
             attach(command, units);
-            return accepted();
+            Result result=accepted();adapter.recordScriptCommand(scriptId,units,"action",null,x,y,result.commandId);return result;
         } catch (Throwable t) { return Result.reject("action 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -168,7 +200,7 @@ public final class CommandGateway {
             if (setter == null) return Result.reject("当前版本不支持 " + type);
             setter.invoke(command, x, y);
             attach(command, units);
-            return accepted();
+            Result result=accepted();adapter.recordScriptCommand(scriptId,units,type,null,x,y,result.commandId);return result;
         } catch (Throwable t) { return Result.reject(type + " 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -184,7 +216,7 @@ public final class CommandGateway {
             if (setter == null) return Result.reject("当前版本不支持 " + type);
             setter.invoke(command, target.raw);
             attach(command, units);
-            return accepted();
+            Result result=accepted();adapter.recordScriptCommand(scriptId,units,type,targetId,null,null,result.commandId);return result;
         } catch (Throwable t) { return Result.reject(type + " 失败: " + t.getClass().getSimpleName()); }
     }
 
@@ -215,7 +247,7 @@ public final class CommandGateway {
     }
 
     private Result accepted() {
-        return new Result(true, null, ids.incrementAndGet());
+        return new Result(true, null, ids.incrementAndGet(),true);
     }
 
     private void setBoolean(Object object, String name, boolean value) throws Throwable {
@@ -232,4 +264,5 @@ public final class CommandGateway {
         Method method = host.findExactCompatibleMethod(type, name, parameters);
         return method != null ? method : host.findCompatibleMethod(type, name, parameters);
     }
+    private static final class SteerState{final float x,y;final int tick;SteerState(float x,float y,int tick){this.x=x;this.y=y;this.tick=tick;}}
 }
