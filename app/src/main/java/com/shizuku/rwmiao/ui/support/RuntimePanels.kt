@@ -167,6 +167,44 @@ object RuntimePanels {
         )
     }
 
+    @JvmStatic
+    fun showUpdateDialog(
+        activity: Activity,
+        version: String,
+        onUpdate: Runnable,
+        onIgnore: Runnable
+    ): Dialog = showDialog(activity, 0.94f, 0.30f) { dialog ->
+        RuntimeDialogSurface(
+            title = "发现新版本",
+            onDismiss = { dialog.dismiss() },
+            body = {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 18.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("发现新版本 $version", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "点击“更新”打开最新 Release 页面。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            actions = {
+                TextButton(onClick = { dialog.dismiss() }) { Text("取消") }
+                TextButton(onClick = {
+                    dialog.dismiss()
+                    onIgnore.run()
+                }) { Text("本次更新不再提示") }
+                Button(onClick = {
+                    dialog.dismiss()
+                    onUpdate.run()
+                }) { Text("更新") }
+            }
+        )
+    }
+
     interface ReinforcePanelCallback {
         fun onTargetChanged(key: String, value: Int): ReinforcePanelData
         fun onWeightChanged(key: String, value: Int): ReinforcePanelData

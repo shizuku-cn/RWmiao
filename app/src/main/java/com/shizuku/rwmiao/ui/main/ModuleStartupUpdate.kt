@@ -20,10 +20,9 @@ object ModuleStartupUpdate {
         if (!ModuleUpdateStateBus.begin()) return
 
         ModuleUpdateStateBus.checking()
-        val appContext = context.applicationContext ?: context
         scope.launch {
             try {
-                when (val result = GithubUpdateManager(appContext).checkLatest()) {
+                when (val result = GithubUpdateManager().checkLatest()) {
                     UpdateCheckResult.UpToDate -> ModuleUpdateStateBus.upToDate()
                     is UpdateCheckResult.Available -> ModuleUpdateStateBus.available(
                         result.update.version,

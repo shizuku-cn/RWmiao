@@ -1,5 +1,7 @@
 package com.shizuku.rwmiao.ui.main
 
+import android.os.Handler
+import android.os.Looper
 import com.shizuku.rwmiao.ui.support.*
 
 import androidx.compose.animation.AnimatedVisibility
@@ -74,6 +76,7 @@ import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_CYAN
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_YELLOW
 import com.shizuku.rwmiao.config.SettingsContract.KEY_SELECTION_ACTION_SCALE_MASK
 import com.shizuku.rwmiao.config.SettingsContract.KEY_SHOW_GAME_DURATION
+import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_UPDATE_IGNORED_VERSION
 import com.shizuku.rwmiao.config.SettingsContract.SELECTION_ACTION_SCALE_ALL
 import com.shizuku.rwmiao.config.SettingsContract.SELECTION_ACTION_SCALE_DESELECT
 import com.shizuku.rwmiao.config.SettingsContract.SELECTION_ACTION_SCALE_FREE_BUILD
@@ -147,9 +150,7 @@ internal fun Preferences(
     onConfigurationImported: () -> Unit
 ) {
     val context = LocalContext.current
-    val updateManager = remember(context) {
-        GithubUpdateManager(context)
-    }
+    val updateManager = remember { GithubUpdateManager() }
     val scope = rememberCoroutineScope()
     var updateState by remember(settings.autoCheckUpdate) {
         mutableStateOf(
@@ -160,6 +161,7 @@ internal fun Preferences(
             }
         )
     }
+    var promptedUpdateVersion by remember { mutableStateOf<String?>(null) }
     var selectionActionScaleMask by remember {
         mutableStateOf(
             page.preferences.getInt(KEY_SELECTION_ACTION_SCALE_MASK, 0)
@@ -201,9 +203,8 @@ internal fun Preferences(
     }
 
     fun checkForUpdates() {
-        if (updateState is UpdateUiState.Checking ||
-            updateState is UpdateUiState.Downloading
-        ) return
+        if (updateState is UpdateUiState.Checking) return
+        promptedUpdateVersion = null
         updateState = UpdateUiState.Checking
         scope.launch {
             updateState = when (val result = updateManager.checkLatest()) {
@@ -216,16 +217,45 @@ internal fun Preferences(
 
     DisposableEffect(settings.autoCheckUpdate) {
         if (settings.autoCheckUpdate) {
+            val mainHandler = Handler(Looper.getMainLooper())
             val listener = object : ModuleUpdateStateBus.Listener {
                 override fun onUpdateStateChanged(state: ModuleUpdateStateBus.Snapshot) {
-                    updateState = state.toUpdateUiState()
+                    mainHandler.post { updateState = state.toUpdateUiState() }
                 }
             }
             ModuleUpdateStateBus.addListener(listener)
-            onDispose { ModuleUpdateStateBus.removeListener(listener) }
+            onDispose {
+                ModuleUpdateStateBus.removeListener(listener)
+                mainHandler.removeCallbacksAndMessages(null)
+            }
         } else {
             onDispose { }
         }
+    }
+
+    LaunchedEffect(updateState) {
+        val available = updateState as? UpdateUiState.Available ?: return@LaunchedEffect
+        val version = available.update.version
+        if (promptedUpdateVersion == version) return@LaunchedEffect
+        if (page.preferences.getString(KEY_UI_UPDATE_IGNORED_VERSION, "").orEmpty() == version) {
+            return@LaunchedEffect
+        }
+        if (page.hostActivity.isFinishing || page.hostActivity.isDestroyed) {
+            return@LaunchedEffect
+        }
+        promptedUpdateVersion = version
+        RuntimePanels.showUpdateDialog(
+            activity = page.hostActivity,
+            version = version,
+            onUpdate = Runnable {
+                openModuleLink(page.hostActivity, MODULE_RELEASES_URL)
+            },
+            onIgnore = Runnable {
+                page.preferences.edit()
+                    .putString(KEY_UI_UPDATE_IGNORED_VERSION, version)
+                    .apply()
+            }
+        )
     }
 
     LazyColumn(
@@ -413,18 +443,8 @@ internal fun Preferences(
                 state = updateState,
                 autoCheck = settings.autoCheckUpdate,
                 onCheck = ::checkForUpdates,
-                onInstall = { update ->
-                    if (updateState !is UpdateUiState.Downloading) {
-                        updateState = UpdateUiState.Downloading(update)
-                        scope.launch {
-                            val result = updateManager.downloadAndInstall(update)
-                            if (result.isFailure) {
-                                updateState = UpdateUiState.Failed(
-                                    result.exceptionOrNull()?.message ?: "更新失败"
-                                )
-                            }
-                        }
-                    }
+                onOpenReleases = {
+                    openModuleLink(context, MODULE_RELEASES_URL)
                 },
                 onAutoCheck = { onSettings(settings.copy(autoCheckUpdate = it)) }
             )
@@ -1298,7 +1318,7 @@ private fun ModuleHeader() {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "v${BuildConfig.VERSION_NAME}",
+                    BuildConfig.VERSION_NAME,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1339,7 +1359,6 @@ private sealed class UpdateUiState {
     object Checking : UpdateUiState()
     object UpToDate : UpdateUiState()
     data class Available(val update: UpdateInfo) : UpdateUiState()
-    data class Downloading(val update: UpdateInfo) : UpdateUiState()
     data class Failed(val message: String) : UpdateUiState()
 }
 
@@ -1357,7 +1376,7 @@ private fun ModuleUpdateStateBus.Snapshot.toUpdateUiState(): UpdateUiState = whe
 private fun UpdateSection(
     state: UpdateUiState,
     onCheck: () -> Unit,
-    onInstall: (UpdateInfo) -> Unit,
+    onOpenReleases: () -> Unit,
     autoCheck: Boolean,
     onAutoCheck: (Boolean) -> Unit
 ) {
@@ -1380,18 +1399,16 @@ private fun UpdateSection(
                     )
                 }
                 when (state) {
-                    UpdateUiState.Checking,
-                    is UpdateUiState.Downloading -> CircularProgressIndicator(
+                    UpdateUiState.Checking -> CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp
                     )
                     is UpdateUiState.Available -> FilledTonalButton(
-                        onClick = { onInstall(state.update) }
+                        onClick = onOpenReleases
                     ) { Text("立即更新") }
                     else -> IconButton(
                         onClick = onCheck,
-                        enabled = state !is UpdateUiState.Checking &&
-                            state !is UpdateUiState.Downloading
+                        enabled = state !is UpdateUiState.Checking
                     ) {
                         Icon(Icons.refresh, contentDescription = "检查更新")
                     }
@@ -1407,11 +1424,6 @@ private fun UpdateSection(
                     "发现新版本 ${state.update.version}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
-                )
-                is UpdateUiState.Downloading -> Text(
-                    "正在下载 ${state.update.version}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 is UpdateUiState.Failed -> Text(
                     state.message,

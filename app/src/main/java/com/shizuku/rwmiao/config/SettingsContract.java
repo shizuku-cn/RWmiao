@@ -68,6 +68,7 @@ public final class SettingsContract {
     public static final String KEY_SMART_BUILD_SERIALIZATION = "smartBuildSerialization";
     public static final String KEY_UI_SELECTED_PAGE = "uiSelectedPage";
     public static final String KEY_UI_AUTO_CHECK_UPDATE = "uiAutoCheckUpdate";
+    public static final String KEY_UI_UPDATE_IGNORED_VERSION = "uiUpdateIgnoredVersion";
     public static final String KEY_MODULE_LAST_ACTIVE = "moduleLastActive";
     public static final String KEY_MODULE_LAST_PACKAGE = "moduleLastPackage";
     public static final String ACTION_MODULE_HEARTBEAT =

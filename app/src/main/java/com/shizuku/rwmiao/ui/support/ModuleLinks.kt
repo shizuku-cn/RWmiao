@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 
 internal const val MODULE_GITHUB_URL = "https://github.com/shizuku-cn/RWmiao"
+internal const val MODULE_RELEASES_URL = "https://github.com/shizuku-cn/RWmiao/releases/latest"
 internal const val MODULE_BILIBILI_URL = "https://b23.tv/0c0Ehn2"
 internal const val SHIZUKU_BILIBILI_URL = "https://space.bilibili.com/1710190893"
 internal const val MODULE_QQ_GROUP_URL =

@@ -1,17 +1,11 @@
 package com.shizuku.rwmiao.ui.main
 
-import android.app.DownloadManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.Environment
 import com.shizuku.rwmiao.BuildConfig
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -27,7 +21,7 @@ internal sealed class UpdateCheckResult {
     data class Error(val message: String) : UpdateCheckResult()
 }
 
-internal class GithubUpdateManager(private val context: Context) {
+internal class GithubUpdateManager {
     suspend fun checkLatest(): UpdateCheckResult = withContext(Dispatchers.IO) {
         try {
             val releaseResponse = fetchJson(LATEST_RELEASE_URL)
@@ -59,74 +53,6 @@ internal class GithubUpdateManager(private val context: Context) {
         } catch (e: Exception) {
             UpdateCheckResult.Error(e.message?.takeIf { it.isNotBlank() } ?: "网络连接失败")
         }
-    }
-
-    suspend fun downloadAndInstall(update: UpdateInfo): Result<Unit> = withContext(Dispatchers.IO) {
-        val manager = context.getSystemService(DownloadManager::class.java)
-            ?: return@withContext Result.failure(IllegalStateException("下载服务不可用"))
-        val fileName = "module-update-${update.version.replace(UNSAFE_FILE_CHARS, "_")}.apk"
-        val request = DownloadManager.Request(Uri.parse(update.downloadUrl))
-            .setTitle("模块更新")
-            .setDescription(update.version)
-            .setMimeType(APK_MIME_TYPE)
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(false)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(
-                context,
-                Environment.DIRECTORY_DOWNLOADS,
-                fileName
-            )
-        val id = try {
-            manager.enqueue(request)
-        } catch (e: Exception) {
-            return@withContext Result.failure(e)
-        }
-        try {
-            for (attempt in 0 until DOWNLOAD_POLL_ATTEMPTS) {
-                var status = DownloadManager.STATUS_PENDING
-                var reason = 0
-                manager.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                        reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                    }
-                }
-                when (status) {
-                    DownloadManager.STATUS_SUCCESSFUL -> {
-                        val uri = manager.getUriForDownloadedFile(id)
-                            ?: return@withContext Result.failure(
-                                IllegalStateException("下载文件不可用")
-                            )
-                        withContext(Dispatchers.Main) { openInstaller(uri) }
-                        return@withContext Result.success(Unit)
-                    }
-                    DownloadManager.STATUS_FAILED -> {
-                        return@withContext Result.failure(
-                            IllegalStateException("下载失败：$reason")
-                        )
-                    }
-                }
-                delay(DOWNLOAD_POLL_INTERVAL_MS)
-            }
-            Result.failure(IllegalStateException("下载超时"))
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    private fun openInstaller(uri: Uri) {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, APK_MIME_TYPE)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        val moduleContext = runCatching {
-            context.createPackageContext(
-                BuildConfig.APPLICATION_ID,
-                Context.CONTEXT_IGNORE_SECURITY
-            )
-        }.getOrNull()
-        (moduleContext ?: context).startActivity(intent)
     }
 
     private fun parseRelease(release: JSONObject): RemoteCandidate? {
@@ -244,10 +170,6 @@ internal class GithubUpdateManager(private val context: Context) {
             "https://api.github.com/repos/shizuku-cn/RWmiao/releases/latest"
         const val REPOSITORY_APK_URL =
             "https://api.github.com/repos/shizuku-cn/RWmiao/contents/%E5%8F%91%E5%B8%83"
-        const val APK_MIME_TYPE = "application/vnd.android.package-archive"
-        const val DOWNLOAD_POLL_INTERVAL_MS = 500L
-        const val DOWNLOAD_POLL_ATTEMPTS = 360
         val VERSION_PATTERN = Regex("""[vV]?(\d+)(?:\.(\d+))?(?:[.-](\d+))?(?:[.-][rR](\d+))?""")
-        val UNSAFE_FILE_CHARS = Regex("[^A-Za-z0-9._-]")
     }
 }
