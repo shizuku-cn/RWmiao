@@ -205,7 +205,7 @@ private fun HomeStatusCard(moduleActive: Boolean) {
                         )
                     }
                     Text(
-                        "v${BuildConfig.VERSION_NAME}",
+                        BuildConfig.VERSION_NAME,
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
@@ -354,7 +354,7 @@ private fun AboutScreen(onBack: () -> Unit) {
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "v${BuildConfig.VERSION_NAME} · 作者 Shizuku",
+                            "${BuildConfig.VERSION_NAME} · 作者 Shizuku",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
