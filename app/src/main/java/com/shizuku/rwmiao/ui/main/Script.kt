@@ -124,13 +124,6 @@ internal fun ScriptPage(page: SettingsPage, scrollState: ScrollState) {
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        Switch(
-                                            checked = record.enabled,
-                                            onCheckedChange = {
-                                                page.scriptManager?.setEnabled(record.id, it)
-                                                refreshKey += 1
-                                            }
-                                        )
                                         AnimatedVisibility(
                                             visible = record.enabled && record.hasSettings,
                                             enter = fadeIn(tween(180)) + scaleIn(tween(220)),
@@ -140,6 +133,13 @@ internal fun ScriptPage(page: SettingsPage, scrollState: ScrollState) {
                                                 Icon(Icons.settings, contentDescription = "脚本设置")
                                             }
                                         }
+                                        Switch(
+                                            checked = record.enabled,
+                                            onCheckedChange = {
+                                                page.scriptManager?.setEnabled(record.id, it)
+                                                refreshKey += 1
+                                            }
+                                        )
                                     }
                                     if (index != records.lastIndex) {
                                         HorizontalDivider(

@@ -98,8 +98,15 @@ try {
     if (-not $ModuleProp.Contains('staticScope=false')) {
         throw 'Module must allow user-selected variant package scopes'
     }
-    if ((Read-ZipText 'META-INF/xposed/scope.list') -ne 'com.corrodinggames.rts') {
+    $Scope = (Read-ZipText 'META-INF/xposed/scope.list') -split "`r?`n"
+    $ExpectedScope = @('com.corrodinggames.rts')
+    if ((Compare-Object $ExpectedScope $Scope).Count -ne 0) {
         throw 'Unexpected LSPosed scope'
+    }
+
+    $SymbolProfile = $Zip.GetEntry('assets/rwmiao-symbols.map')
+    if ($null -eq $SymbolProfile -or $SymbolProfile.Length -lt 100000) {
+        throw 'Missing or incomplete runtime compatibility symbol profile'
     }
 
     $DexEntry = $Zip.GetEntry('assets/rwmiao_actions.dex')
@@ -153,6 +160,7 @@ try {
         ZipAligned = $true
         XposedEntrypoint = 'com.shizuku.rwmiao.module.RWmiaoModule'
         ActionPayload = 'verified'
+        CompatibilityProfile = 'verified'
     }
 } finally {
     Remove-Item -LiteralPath $VerificationCopy -Force -ErrorAction SilentlyContinue

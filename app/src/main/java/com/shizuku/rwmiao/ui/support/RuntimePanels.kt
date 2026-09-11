@@ -48,10 +48,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -77,13 +73,12 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import android.os.Build
 import com.shizuku.rwmiao.BuildConfig
-import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_DYNAMIC_COLOR
 import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_THEME_MODE
 import com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_DARK
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_LIGHT
+import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_SYSTEM
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -144,13 +139,14 @@ object RuntimePanels {
         activity: Activity,
         scriptName: String,
         onConfirm: Runnable
-    ): Dialog = showDialog(activity, 0.72f, 0.30f) { dialog ->
+    ): Dialog = showDialog(activity, 0.72f, 0f) { dialog ->
         RuntimeDialogSurface(
             title = "删除脚本",
             onDismiss = { dialog.dismiss() },
+            wrapContent = true,
             body = {
                 Column(
-                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 18.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp),
                     verticalArrangement = Arrangement.Center
                 ) {
                     Text("确定删除“$scriptName”吗？", style = MaterialTheme.typography.bodyLarge)
@@ -168,6 +164,100 @@ object RuntimePanels {
                     dialog.dismiss()
                     onConfirm.run()
                 }) { Text("删除") }
+            }
+        )
+    }
+
+    @JvmStatic
+    fun showUpdateDialog(
+        activity: Activity,
+        version: String,
+        releaseNotes: String,
+        onJoinGroup: Runnable,
+        onUpdate: Runnable,
+        onIgnore: Runnable
+    ): Dialog = showDialog(activity, 0.94f, 0f) { dialog ->
+        RuntimeDialogSurface(
+            title = "发现新版本",
+            onDismiss = { dialog.dismiss() },
+            wrapContent = true,
+            body = {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("发现新版本 $version", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        releaseNotes.ifBlank { "该版本没有发布说明。" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            actions = {
+                TextButton(onClick = {
+                    dialog.dismiss()
+                    onJoinGroup.run()
+                }) { Text("加群") }
+                TextButton(onClick = { dialog.dismiss() }) { Text("取消") }
+                Button(onClick = {
+                    dialog.dismiss()
+                    onUpdate.run()
+                }) { Text("更新") }
+                TextButton(onClick = {
+                    dialog.dismiss()
+                    onIgnore.run()
+                }) { Text("本次更新不再提示") }
+            }
+        )
+    }
+
+    @JvmStatic
+    fun showFeedbackDialog(
+        activity: Activity,
+        onQq: Runnable,
+        onBilibili: Runnable,
+        onGithub: Runnable
+    ): Dialog = showDialog(activity, 0.92f, 0f) { dialog ->
+        RuntimeDialogSurface(
+            title = "反馈",
+            onDismiss = { dialog.dismiss() },
+            wrapContent = true,
+            body = {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "反馈bug或提交改进和新功能建议\n\n" +
+                            "选择反馈渠道：\n" +
+                            "QQ群：在群内@群主发言\n" +
+                            "bilibili：前往对应宣传视频评论区反馈\n" +
+                            "Github：提交issue进行反馈。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            actions = {
+                TextButton(onClick = {
+                    dialog.dismiss()
+                    onQq.run()
+                }) { Text("QQ") }
+                TextButton(onClick = {
+                    dialog.dismiss()
+                    onBilibili.run()
+                }) { Text("Bilibili") }
+                TextButton(onClick = {
+                    dialog.dismiss()
+                    onGithub.run()
+                }) { Text("Github") }
+                TextButton(onClick = { dialog.dismiss() }) { Text("取消") }
             }
         )
     }
@@ -264,45 +354,168 @@ object RuntimePanels {
                             shape = MaterialTheme.shapes.large,
                             color = MaterialTheme.colorScheme.surfaceContainer
                         ) {
-                            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(row.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                if (row.description.isNotBlank()) Text(row.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                when (row.component) {
-                                    "switch" -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                        Text(if (values[index].toBoolean()) "已开启" else "已关闭", Modifier.weight(1f))
-                                        Switch(checked = values[index].toBoolean(), onCheckedChange = { checked -> values = values.toMutableList().also { it[index] = checked.toString() } })
+                            when (row.component) {
+                                "switch" -> Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            values = values.toMutableList().also {
+                                                it[index] = (!values[index].toBoolean()).toString()
+                                            }
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            row.name,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (row.description.isNotBlank()) {
+                                            Text(
+                                                row.description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
-                                    "slider" -> {
-                                        val min = row.min?.toFloat() ?: 0f
-                                        val max = row.max?.toFloat() ?: 1f
-                                        val current = values[index].toFloatOrNull()?.coerceIn(min, max) ?: min
-                                        val steps = row.step?.takeIf { it > 0.0 }?.let { ((max - min) / it.toFloat()).roundToInt().minus(1).coerceAtLeast(0) } ?: 0
-                                        Text(values[index], style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                    Switch(
+                                        checked = values[index].toBoolean(),
+                                        onCheckedChange = { checked ->
+                                            values = values.toMutableList().also {
+                                                it[index] = checked.toString()
+                                            }
+                                        }
+                                    )
+                                }
+                                "slider" -> {
+                                    val min = row.min?.toFloat() ?: 0f
+                                    val max = row.max?.toFloat() ?: 1f
+                                    val current = values[index].toFloatOrNull()?.coerceIn(min, max) ?: min
+                                    val steps = row.step?.takeIf { it > 0.0 }?.let {
+                                        ((max - min) / it.toFloat()).roundToInt().minus(1).coerceAtLeast(0)
+                                    } ?: 0
+                                    Column(
+                                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                row.name,
+                                                modifier = Modifier.weight(1f),
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                values[index],
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        if (row.description.isNotBlank()) {
+                                            Text(
+                                                row.description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                         Slider(
                                             value = current,
-                                            onValueChange = { number -> values = values.toMutableList().also { it[index] = number.toString() } },
+                                            onValueChange = { number ->
+                                                values = values.toMutableList().also {
+                                                    it[index] = number.toString()
+                                                }
+                                            },
                                             valueRange = min..max,
                                             steps = steps
                                         )
                                     }
-                                    "choice" -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                }
+                                "choice" -> Column(
+                                    Modifier.fillMaxWidth().padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        row.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (row.description.isNotBlank()) {
+                                        Text(
+                                            row.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                         row.options.forEach { option ->
                                             Row(
-                                                Modifier.fillMaxWidth().clickable { values = values.toMutableList().also { it[index] = option.value } }.padding(vertical = 3.dp),
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        values = values.toMutableList().also {
+                                                            it[index] = option.value
+                                                        }
+                                                    }
+                                                    .padding(vertical = 3.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(option.label, Modifier.weight(1f))
-                                                Checkbox(checked = values[index] == option.value, onCheckedChange = { if (it) values = values.toMutableList().also { list -> list[index] = option.value } })
+                                                Checkbox(
+                                                    checked = values[index] == option.value,
+                                                    onCheckedChange = {
+                                                        if (it) {
+                                                            values = values.toMutableList().also { list ->
+                                                                list[index] = option.value
+                                                            }
+                                                        }
+                                                    }
+                                                )
                                             }
                                         }
                                     }
-                                    else -> OutlinedTextField(
+                                }
+                                else -> Column(
+                                    Modifier.fillMaxWidth().padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        row.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (row.description.isNotBlank()) {
+                                        Text(
+                                            row.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    OutlinedTextField(
                                         value = values[index],
-                                        onValueChange = { text -> values = values.toMutableList().also { it[index] = text.take(256) } },
+                                        onValueChange = { text ->
+                                            values = values.toMutableList().also {
+                                                it[index] = text.take(256)
+                                            }
+                                        },
                                         modifier = Modifier.fillMaxWidth(),
                                         singleLine = true,
-                                        supportingText = if (row.type == "number" && (row.min != null || row.max != null)) { { Text("范围：${row.min ?: "-∞"} ～ ${row.max ?: "+∞"}${row.step?.let { "，步长 $it" } ?: ""}") } } else null,
-                                        keyboardOptions = KeyboardOptions(keyboardType = if (row.type == "number") KeyboardType.Decimal else KeyboardType.Text, imeAction = ImeAction.Done)
+                                        supportingText = if (row.type == "number" && (row.min != null || row.max != null)) {
+                                            {
+                                                Text(
+                                                    "范围：${row.min ?: "-∞"} ～ ${row.max ?: "+∞"}" +
+                                                        "${row.step?.let { "，步长 $it" } ?: ""}"
+                                                )
+                                            }
+                                        } else null,
+                                        keyboardOptions = KeyboardOptions(
+                                            keyboardType = if (row.type == "number") KeyboardType.Decimal else KeyboardType.Text,
+                                            imeAction = ImeAction.Done
+                                        )
                                     )
                                 }
                             }
@@ -428,7 +641,7 @@ object RuntimePanels {
         val dialog = Dialog(activity)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val owner = DialogComposeViewTreeOwner()
-        val composeView = ComposeView(activity)
+        val composeView = ComposeView(moduleComposeContext(activity))
         composeView.setViewCompositionStrategy(
             ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool
         )
@@ -521,18 +734,12 @@ private fun RuntimeTheme(activity: Activity, content: @Composable () -> Unit) {
         moduleContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
     val systemDark = isSystemInDarkTheme()
-    val dark = when (preferences.getInt(KEY_UI_THEME_MODE, 0)) {
+    val dark = when (preferences.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM)) {
         UI_THEME_LIGHT -> false
         UI_THEME_DARK -> true
         else -> systemDark
     }
-    val dynamic = preferences.getBoolean(KEY_UI_DYNAMIC_COLOR, true) &&
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val scheme = if (dynamic) {
-        if (dark) dynamicDarkColorScheme(activity) else dynamicLightColorScheme(activity)
-    } else {
-        if (dark) darkColorScheme() else lightColorScheme()
-    }
+    val scheme = moduleColorScheme(preferences.readModuleColorMode(), dark, activity)
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
@@ -540,16 +747,18 @@ private fun RuntimeTheme(activity: Activity, content: @Composable () -> Unit) {
 private fun RuntimeDialogSurface(
     title: String,
     onDismiss: () -> Unit,
+    wrapContent: Boolean = false,
     body: @Composable ColumnScope.() -> Unit,
     actions: @Composable RowScope.() -> Unit
 ) {
+    val containerModifier = if (wrapContent) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
     Surface(
-        modifier = Modifier.fillMaxSize(),
+        modifier = containerModifier,
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 4.dp
     ) {
-        Column(Modifier.fillMaxSize()) {
+        Column(containerModifier) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 18.dp, top = 6.dp, end = 6.dp, bottom = 2.dp).heightIn(min = 40.dp),
                 verticalAlignment = Alignment.CenterVertically

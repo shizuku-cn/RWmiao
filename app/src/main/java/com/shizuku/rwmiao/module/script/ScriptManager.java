@@ -56,7 +56,7 @@ public final class ScriptManager {
         static String join(List<String> values) { StringBuilder b=new StringBuilder();for(String v:values){if(b.length()>0)b.append(", ");b.append(v);}return b.toString(); }
     }
     private static final class RuntimeScript {
-        final LuaProgram program;
+        LuaProgram program;
         boolean runtimeDisabled;
         RuntimeScript(LuaProgram p){program=p;}
         ScriptDefinition definition(){return program.definition;}
@@ -105,7 +105,7 @@ public final class ScriptManager {
             if(tickHooks.isEmpty())for(Method method:tickMethods)tickHooks.add(host.tickDispatcher().register(method,queue->{try{tick();}catch(Throwable t){Log.e(TAG,"script tick skipped",t);}}));
         }else{
             for(GameTickDispatcher.Registration handle:tickHooks)try{handle.close();}catch(Throwable ignored){}
-            tickHooks.clear();simulationLifecycle.reset(host.completedResyncGeneration());
+            tickHooks.clear();
         }
         if(loadedNow)host.refreshScriptSelectionAction();
     }
@@ -128,7 +128,13 @@ public final class ScriptManager {
             requestedData.addAll(d.dataGroups);
         }}
         if(due.isEmpty()){if(hookStateDirty){hookStateDirty=false;refreshSettings();}return;}
-        GameSnapshot snapshot=adapter.snapshot(requestedData);if(snapshot.tick<0)return;
+        LinkedHashSet<Long> detailedUnits=null;boolean scoped=true;
+        synchronized(lock){for(RuntimeScript runtime:due){ScriptDefinition d=runtime.definition();
+            if(!d.dataGroups.contains("construction")){scoped=false;break;}
+            for(String group:d.dataGroups)if(!constructionScopeGroup(group)){scoped=false;break;}
+            if(!scoped)break;
+        }if(scoped){detailedUnits=new LinkedHashSet<>();for(RuntimeScript runtime:due){LinkedHashSet<Long> ids=unitBindings.get(runtime.definition().id);if(ids!=null)detailedUnits.addAll(ids);}}}
+        GameSnapshot snapshot=adapter.snapshot(requestedData,detailedUnits);if(snapshot.tick<0)return;
         synchronized(lock){java.util.Iterator<Map.Entry<String,LinkedHashSet<Long>>> it=unitBindings.entrySet().iterator();while(it.hasNext()){Map.Entry<String,LinkedHashSet<Long>> entry=it.next();LinkedHashSet<Long> bindings=entry.getValue();Map<Long,String> groups=unitGroups.get(entry.getKey());java.util.Iterator<Long> ids=bindings.iterator();while(ids.hasNext()){Long id=ids.next();UnitSnapshot unit=snapshot.get(id);if(unit==null||unit.relation!=0||unit.dead||unit.deleted){ids.remove();if(groups!=null)groups.remove(id);hookStateDirty=true;}}if(bindings.isEmpty()){it.remove();unitGroups.remove(entry.getKey());}}}
         for(RuntimeScript runtime:due){
             ScriptDefinition d=runtime.definition();
@@ -139,10 +145,17 @@ public final class ScriptManager {
         if(hookStateDirty){hookStateDirty=false;refreshSettings();}
     }
 
+    private static boolean constructionScopeGroup(String group){
+        return "identity".equals(group)||"team".equals(group)||"position".equals(group)
+                ||"movement".equals(group)||"orders".equals(group)||"pathing".equals(group)
+                ||"construction".equals(group);
+    }
+
     public boolean masterEnabled(){if(context==null)return false;Boolean cached=masterCache;if(cached==null){cached=preferences().getBoolean(KEY_SCRIPTS_MASTER,false);masterCache=cached;}return cached;}
     public void setMasterEnabled(boolean enabled){masterCache=enabled;if(context!=null)preferences().edit().putBoolean(KEY_SCRIPTS_MASTER,enabled).apply();refreshSettings();host.refreshScriptSelectionAction();}
     public boolean isEnabled(String id){if(context==null)return true;synchronized(lock){Boolean cached=enabledCache.get(id);if(cached!=null)return cached;boolean enabled=preferences().getBoolean(KEY_SCRIPT_ENABLED_PREFIX+id,true);enabledCache.put(id,enabled);return enabled;}}
     public void setEnabled(String id,boolean enabled){synchronized(lock){enabledCache.put(id,enabled);if(!enabled){unitBindings.remove(id);unitGroups.remove(id);}}if(context!=null)preferences().edit().putBoolean(KEY_SCRIPT_ENABLED_PREFIX+id,enabled).apply();refreshSettings();host.refreshScriptSelectionAction();}
+    public boolean resume(String id){synchronized(lock){RuntimeScript runtime=scripts.get(id);if(runtime==null)return false;runtime.program.resume();return true;}}
     public List<Record> records(){synchronized(lock){ArrayList<Record> out=new ArrayList<>();for(RuntimeScript r:scripts.values())out.add(new Record(r.definition(),isEnabled(r.definition().id)));return out;}}
     public void delete(String id){
         if(id==null||id.isEmpty())return;
@@ -261,8 +274,8 @@ public final class ScriptManager {
     private String unitGroup(ScriptDefinition d,long id){synchronized(lock){Map<Long,String> groups=unitGroups.get(d.id);return groups==null?null:groups.get(id);}}
     private void finishUnit(ScriptDefinition d,long id){synchronized(lock){LinkedHashSet<Long> ids=unitBindings.get(d.id);if(ids!=null&&ids.remove(id)){hookStateDirty=true;if(ids.isEmpty())unitBindings.remove(d.id);}Map<Long,String> groups=unitGroups.get(d.id);if(groups!=null){groups.remove(id);if(groups.isEmpty())unitGroups.remove(d.id);}}}
     private void exitScript(ScriptDefinition d,String message){synchronized(lock){if(unitBindings.remove(d.id)!=null)hookStateDirty=true;unitGroups.remove(d.id);}if(message!=null&&!message.trim().isEmpty())adapter.localMessage("["+d.name+"] "+message.trim());}
-    private void clearMatchState(){synchronized(lock){unitBindings.clear();unitGroups.clear();adapter.clearTransientState();for(RuntimeScript r:scripts.values()){r.program.resetTickState();r.runtimeDisabled=false;}}refreshSettings();}
-    private void prepareAfterResync(){synchronized(lock){adapter.clearTransientState();for(RuntimeScript r:scripts.values())r.program.resetTickState();}}
+    private void clearMatchState(){synchronized(lock){unitBindings.clear();unitGroups.clear();adapter.clearTransientState();commands.clearTransientState();for(RuntimeScript r:scripts.values()){try{r.program=r.program.resetForNewMatch();}catch(Throwable t){Log.e(TAG,"Unable to reset Lua VM for new match: "+r.definition().id,t);r.program.resetTickState();}r.runtimeDisabled=false;}}refreshSettings();}
+    private void prepareAfterResync(){synchronized(lock){adapter.clearTransientState();commands.clearTransientState();for(RuntimeScript r:scripts.values())r.program.resetTickState();}}
     private boolean ensureStorage()throws Throwable{context=host.preferenceContext();if(context==null)return false;directory=new File(context.getFilesDir(),"rwmiao/scripts");if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建脚本目录");File marker=new File(directory,".defaults_install_stamp");android.content.pm.ApplicationInfo moduleInfo=host.getModuleApplicationInfo();File moduleApk=moduleInfo==null||moduleInfo.sourceDir==null?null:new File(moduleInfo.sourceDir);String installStamp=moduleApk==null?"unknown":moduleApk.getAbsolutePath()+":"+moduleApk.lastModified()+":"+moduleApk.length();
         String previous=marker.isFile()?read(new FileInputStream(marker)):null;
         if(!installStamp.equals(previous)){

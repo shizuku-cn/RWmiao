@@ -602,7 +602,7 @@ final class SmartPathing {
 
     private String orderTypeName(Object order) throws Throwable {
         if (order == null) return null;
-        for (String name : new String[]{"a", "f521a"}) {
+        for (String name : new String[]{"a"}) {
             try {
                 Object value = host.findFieldValue(order, name);
                 if (value instanceof Enum) return ((Enum<?>) value).name();

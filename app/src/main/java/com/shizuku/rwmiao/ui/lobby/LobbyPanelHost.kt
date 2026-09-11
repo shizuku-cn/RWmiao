@@ -23,6 +23,7 @@ import androidx.savedstate.R as SavedStateR
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.shizuku.rwmiao.config.SettingsContract.*
 import com.shizuku.rwmiao.module.lobby.LobbyRoom
+import com.shizuku.rwmiao.ui.support.moduleComposeContext
 
 class LobbyPanelHost(
     context: Context,
@@ -35,7 +36,7 @@ class LobbyPanelHost(
     }
 
     private val owner = ComposeViewTreeOwner()
-    private val composeView = ComposeView(context)
+    private val composeView = ComposeView(moduleComposeContext(context))
     private val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var rooms by mutableStateOf<List<LobbyRoom>>(emptyList())
     private var recentRooms by mutableStateOf(loadLobbyRecentRooms(preferences))

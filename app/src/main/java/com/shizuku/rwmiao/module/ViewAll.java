@@ -21,7 +21,7 @@ final class ViewAll {
     void install() throws Throwable {
         Class<?> renderer = loader.loadClass(host.target("gameFramework.f.i"));
         unitClass = loader.loadClass(host.target("game.units.ce"));
-        canSee = renderer.getDeclaredMethod("e", unitClass);
+        canSee = host.findCompatibleMethod(renderer, "e", unitClass);
         refreshSettings();
     }
 

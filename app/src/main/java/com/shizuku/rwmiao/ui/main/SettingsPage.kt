@@ -21,6 +21,8 @@ import com.shizuku.rwmiao.config.SettingsContract.*
 import com.shizuku.rwmiao.app.LauncherIconController
 import com.shizuku.rwmiao.module.RWmiaoModule
 import com.shizuku.rwmiao.module.script.ScriptManager
+import com.shizuku.rwmiao.ui.support.moduleComposeContext
+import com.shizuku.rwmiao.ui.support.readModuleColorMode
 
 class SettingsPage(
     internal val hostActivity: Activity,
@@ -31,7 +33,7 @@ class SettingsPage(
 
     internal val preferences = hostActivity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val owner = ComposeViewTreeOwner()
-    private val composeView = ComposeView(hostActivity)
+    private val composeView = ComposeView(moduleComposeContext(hostActivity))
     internal var closing by mutableStateOf(false)
         private set
     private var contentInstalled = false
@@ -217,7 +219,7 @@ internal data class SettingsState(
                 factoryExitThrough = prefs.getBoolean(KEY_FACTORY_EXIT_THROUGH, false),
                 reinforceOn = prefs.getBoolean(KEY_REINFORCE_ON, false),
                 reinforceWeightMode = prefs.getBoolean(KEY_REINFORCE_WEIGHT_MODE, false),
-                showReinforcePanel = prefs.getBoolean(KEY_SHOW_REINFORCE_PANEL, true),
+                showReinforcePanel = prefs.getBoolean(KEY_SHOW_REINFORCE_PANEL, false),
                 freeSelection = prefs.getBoolean(KEY_FREE_SELECTION, false),
                 freeBuild = prefs.getBoolean(KEY_FREE_BUILD, false),
                 selectAll = prefs.getBoolean(KEY_SELECT_ALL, false),
@@ -267,19 +269,10 @@ internal data class UiPreferences(
 
     companion object {
         fun load(prefs: android.content.SharedPreferences): UiPreferences {
-            val colorMode = if (prefs.contains(KEY_UI_COLOR_MODE)) {
-                prefs.getInt(KEY_UI_COLOR_MODE, UI_COLOR_DEFAULT)
-            } else if (prefs.contains(KEY_UI_DYNAMIC_COLOR) &&
-                prefs.getBoolean(KEY_UI_DYNAMIC_COLOR, false)
-            ) {
-                UI_COLOR_DYNAMIC
-            } else {
-                UI_COLOR_DEFAULT
-            }
             return UiPreferences(
                 themeMode = prefs.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM),
-                colorMode = colorMode.coerceIn(UI_COLOR_DEFAULT, UI_COLOR_CYAN),
-                autoCheckUpdate = prefs.getBoolean(KEY_UI_AUTO_CHECK_UPDATE, false)
+                colorMode = prefs.readModuleColorMode(),
+                autoCheckUpdate = prefs.getBoolean(KEY_UI_AUTO_CHECK_UPDATE, true)
             )
         }
     }

@@ -9,7 +9,7 @@ import java.util.Set;
 
 public final class ScriptDefinition {
     private static final Set<String> ALLOWED_DATA = new LinkedHashSet<>();
-    static { Collections.addAll(ALLOWED_DATA,"identity","team","position","health","movement","combat","weapons","orders","pathing","transport","build","production","actions","abilities","damage","selection","map","resources","projectiles","environment","catalog","all"); }
+    static { Collections.addAll(ALLOWED_DATA,"identity","team","position","health","movement","combat","weapons","orders","pathing","repair","transport","construction","build","production","actions","abilities","damage","selection","map","resources","projectiles","environment","catalog","all"); }
     public final int api;
     public final String id;
     public final String name;

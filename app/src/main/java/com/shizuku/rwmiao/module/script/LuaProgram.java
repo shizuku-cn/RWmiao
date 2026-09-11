@@ -24,18 +24,21 @@ import java.util.concurrent.atomic.AtomicReference;
 final class LuaProgram {
     private static final int MAX_CALLBACKS = 32;
     private static final int MAX_INSTRUCTIONS = 250_000;
-    private static final String[] DATA_GROUPS = {"identity","team","position","health","movement","combat","weapons","orders","pathing","transport","build","production","actions","abilities","damage","selection","map","resources","projectiles","environment","catalog","all"};
-    private static final String[] UNIT_FIELDS = {"id","type_id","type_name","building","orderable","team_id","team_name","relation","relation_name","x","y","height","position","heading","radius","health","max_health","health_ratio","health_missing","shield","max_shield","shield_ratio","shield_missing","combined_health_ratio","max_move_speed","real_speed","velocity_x","velocity_y","acceleration","deceleration","turn_speed","moving","movement_type","path_state","path_pending","attack_range","weapon_count","weapons","target_id","current_order","order_target_id","order_x","order_y","waypoint_count","carrier_id","attached","transport_capacity","loaded_unit_ids","build_progress","factory","queue_size","production_items","actions","action_details","abilities","buildable_types","last_damaged_tick","last_damage_amount","last_damage_source_id","visible_to_local","fogged_to_local","explored_to_local","selected","dead","deleted","idle","group_id"};
+    private static final String[] DATA_GROUPS = {"identity","team","position","health","movement","combat","weapons","orders","pathing","repair","transport","construction","build","production","actions","abilities","damage","selection","map","resources","projectiles","environment","catalog","all"};
+    private static final String[] UNIT_FIELDS = {"id","type_id","type_name","building","orderable","team_id","team_name","relation","relation_name","x","y","height","position","heading","radius","health","max_health","health_ratio","health_missing","shield","max_shield","shield_ratio","shield_missing","combined_health_ratio","max_move_speed","real_speed","velocity_x","velocity_y","acceleration","deceleration","turn_speed","moving","movement_type","throttle","speed_ratio","path_state","path_pending","path_available","path_points","path_target_x","path_target_y","path_next_x","path_next_y","attack_range","weapon_count","weapons","target_id","current_order","order_target_id","order_x","order_y","waypoint_count","order_revision","order_changed","order_source","order_automatic","order_issued_tick","order_command_id","order_script_id","last_player_order","move_destination_x","move_destination_y","next_waypoint_x","next_waypoint_y","desired_heading","chasing_target_id","intent_type","intent_target_id","intent_target_role","is_chasing","chase_target_id","is_protecting","protect_target_id","is_building_order","build_target_id","is_reclaiming","reclaim_target_id","is_repairing","repair_target_id","repair_automatic","repair_range","carrier_id","attached","transport_capacity","loaded_unit_ids","is_construction_site","is_unfinished","construction_progress","construction_state","construction_key","build_progress","factory","queue_size","production_items","actions","action_details","abilities","buildable_types","last_damaged_tick","last_damage_amount","last_damage_source_id","visible_to_local","fogged_to_local","explored_to_local","selected","dead","deleted","idle","group_id"};
     private static final String[] MAP_FIELDS = {"tile_x","tile_y","in_bounds","available","tile_id","tile_name","water","water_bridge","lava","cliff","resource_pool","large_cliff_or_trees","blocks_buildings","land_blocked","visible","fogged","explored","unexplored","movement_type","grid_x","grid_y","width","height","world_to_grid","terrain_cost","building_cost","object_cost","terrain_blocked","building_blocked","object_blocked","passable","clearance_radius","clearance_passable"};
-    private static final String[] COMMANDS = {"move","attack_move","attack","patrol","guard","repair","reclaim","enter","load","build","action","stop"};
-    private static final String[] LIFECYCLE = {"finish","exit"};
+    private static final String[] COMMANDS = {"move","steer","move_keep_target","attack_move","attack","patrol","guard","repair","assist_build","reclaim","enter","load","build","action","stop"};
+    private static final String[] LIFECYCLE = {"finish","exit","suspend","resume"};
     final Globals globals;
     final LuaTable rw;
     final ScriptDefinition definition;
     final LuaInstructionLimiter budget;
     private final ArrayList<TickHandler> ticks;
     private final AtomicReference<Set<String>> runtimeCapabilities;
+    private final String source;
+    private final String sourceName;
     private int consecutiveErrors;
+    private int suspendedUntil = Integer.MIN_VALUE;
 
     private static final class TickHandler {
         final int interval;
@@ -45,8 +48,10 @@ final class LuaProgram {
     }
 
     private LuaProgram(Globals globals, LuaTable rw, ScriptDefinition definition, ArrayList<TickHandler> ticks,
-                       LuaInstructionLimiter budget, AtomicReference<Set<String>> runtimeCapabilities) {
+                       LuaInstructionLimiter budget, AtomicReference<Set<String>> runtimeCapabilities,
+                       String source, String sourceName) {
         this.globals = globals; this.rw = rw; this.definition = definition; this.ticks = ticks; this.budget = budget; this.runtimeCapabilities=runtimeCapabilities;
+        this.source=source; this.sourceName=sourceName;
     }
 
     static LuaProgram compile(String source, String sourceName) throws IOException {
@@ -115,25 +120,31 @@ final class LuaProgram {
         rw.set("lifecycle", stringTable(LIFECYCLE));
         LuaTable signatures=new LuaTable();
         signatures.set("move","ctx:move(unit_or_list,x,y,append)");signatures.set("attack_move","ctx:attack_move(unit_or_list,x,y,append)");
+        signatures.set("steer","ctx:steer(unit_or_list,x,y[,options])");signatures.set("move_keep_target","ctx:move_keep_target(unit_or_list,x,y,target[,options])");
         signatures.set("attack","ctx:attack(unit_or_list,target,append)");signatures.set("patrol","ctx:patrol(unit_or_list,x,y,append)");
         signatures.set("guard","ctx:guard(unit_or_list,target,append)");signatures.set("repair","ctx:repair(unit_or_list,target,append)");
+        signatures.set("assist_build","ctx:assist_build(builder_or_list,unfinished_building[,options])");
         signatures.set("reclaim","ctx:reclaim(unit_or_list,target,append)");signatures.set("enter","ctx:enter(unit_or_list,transport,append)");
         signatures.set("load","ctx:load(transport_or_list,target,append)");signatures.set("build","ctx:build(builder_or_list,type_id,x,y,variant,append)");
         signatures.set("action","ctx:action(unit_or_list,action_id[,x,y,append])");signatures.set("stop","ctx:stop(unit_or_list)");
         signatures.set("finish","ctx:finish([unit_or_list])");
         signatures.set("exit","ctx:exit([local_message])");
+        signatures.set("suspend","ctx:suspend(ticks)");signatures.set("resume","ctx:resume()");
         rw.set("command_signatures",signatures);
-        LuaTable queries=new LuaTable();queries.set("units","ctx:units([filter])");queries.set("self_units","ctx:self_units([filter])");queries.set("enemies","ctx:enemies([filter])");queries.set("allies","ctx:allies([filter])");queries.set("selected","ctx:selected([filter])");queries.set("get","ctx:get(id_or_unit)");queries.set("nearest_enemy","ctx:nearest_enemy(point_or_unit[,filter])");queries.set("within","ctx:within(point,radius[,filter])");queries.set("tile_at","ctx:tile_at(point)");queries.set("tile_rect","ctx:tile_rect(tile_x,tile_y,width,height[,step])");queries.set("fog_at","ctx:fog_at(point)");queries.set("is_fogged","ctx:is_fogged(point)");queries.set("is_visible","ctx:is_visible(point)");queries.set("path_tile_at","ctx:path_tile_at(point[,movement_type[,radius]])");queries.set("is_path_passable","ctx:is_path_passable(point[,movement_type[,radius]])");queries.set("is_passable","ctx:is_passable(point[,movement_type[,radius]])");queries.set("find_path","ctx:find_path(start,goal[,movement_type[,options]])");queries.set("groups","ctx:groups()");queries.set("group_of","ctx:group_of(unit_or_id)");rw.set("query_signatures",queries);
+        LuaTable queries=new LuaTable();queries.set("units","ctx:units([filter])");queries.set("self_units","ctx:self_units([filter])");queries.set("enemies","ctx:enemies([filter])");queries.set("allies","ctx:allies([filter])");queries.set("selected","ctx:selected([filter])");queries.set("get","ctx:get(id_or_unit)");queries.set("nearest_enemy","ctx:nearest_enemy(point_or_unit[,filter])");queries.set("within","ctx:within(point,radius[,filter])");queries.set("repair_status","ctx:repair_status(repairer)");queries.set("repair_targets","ctx:repair_targets(repairer[,options])");queries.set("construction_targets","ctx:construction_targets([options])");queries.set("construction_check","ctx:construction_check(builder,unfinished_building[,options])");queries.set("construction_status","ctx:construction_status(builder[,unfinished_building])");queries.set("tile_at","ctx:tile_at(point)");queries.set("tile_rect","ctx:tile_rect(tile_x,tile_y,width,height[,step])");queries.set("fog_at","ctx:fog_at(point)");queries.set("is_fogged","ctx:is_fogged(point)");queries.set("is_visible","ctx:is_visible(point)");queries.set("path_tile_at","ctx:path_tile_at(point[,movement_type[,radius]])");queries.set("is_path_passable","ctx:is_path_passable(point[,movement_type[,radius]])");queries.set("is_passable","ctx:is_passable(point[,movement_type[,radius]])");queries.set("find_path","ctx:find_path(start,goal[,movement_type[,options]])");queries.set("path_clearance","ctx:path_clearance(start,goal[,movement_type[,options]])");queries.set("reachable_area","ctx:reachable_area(point[,movement_type[,options]])");queries.set("is_dead_end","ctx:is_dead_end(point[,movement_type[,options]])");queries.set("find_escape","ctx:find_escape(unit,threats[,options])");queries.set("predict_trajectory","ctx:predict_trajectory(unit[,options])");queries.set("find_safe_route","ctx:find_safe_route(unit,threats[,options])");queries.set("dynamic_route","ctx:dynamic_route(unit,threats[,options])");queries.set("threat_assessment","ctx:threat_assessment(unit,threats[,options])");queries.set("threat_retreat","ctx:threat_retreat(unit,threats[,options])");queries.set("fire_solution","ctx:fire_solution(attacker,target[,weapon_index])");queries.set("can_fire_at","ctx:can_fire_at(attacker,target[,weapon_index])");queries.set("range_margin","ctx:range_margin(attacker,target[,weapon_index])");queries.set("time_until_can_fire","ctx:time_until_can_fire(attacker,target[,weapon_index])");queries.set("predict_position","ctx:predict_position(unit,ticks)");queries.set("time_to_stop","ctx:time_to_stop(unit)");queries.set("braking_distance","ctx:braking_distance(unit)");queries.set("time_to_heading","ctx:time_to_heading(unit,angle)");queries.set("intercept_point","ctx:intercept_point(chaser,target[,options])");queries.set("groups","ctx:groups()");queries.set("group_of","ctx:group_of(unit_or_id)");rw.set("query_signatures",queries);
         LuaTable fieldGroups=new LuaTable();
         putGroup(fieldGroups,"identity","id","type_id","type_name","building","orderable","dead","deleted");
         putGroup(fieldGroups,"team","team_id","team_name","relation","relation_name");
         putGroup(fieldGroups,"position","x","y","height","position","heading","radius");
         putGroup(fieldGroups,"health","health","max_health","health_ratio","health_missing","shield","max_shield","shield_ratio","shield_missing","combined_health_ratio");
         putGroup(fieldGroups,"movement","movement_type","max_move_speed");putGroup(fieldGroups,"combat","attack_range","weapon_count","target_id");
-        putGroup(fieldGroups,"movement","real_speed","velocity_x","velocity_y","acceleration","deceleration","turn_speed","moving");
-        putGroup(fieldGroups,"weapons","weapons");putGroup(fieldGroups,"pathing","path_state","path_pending");
-        putGroup(fieldGroups,"orders","current_order","order_target_id","order_x","order_y","waypoint_count","idle");
-        putGroup(fieldGroups,"transport","carrier_id","attached","transport_capacity","loaded_unit_ids");putGroup(fieldGroups,"build","build_progress","factory","queue_size","buildable_types");
+        putGroup(fieldGroups,"movement","real_speed","velocity_x","velocity_y","acceleration","deceleration","turn_speed","moving","throttle","speed_ratio");
+        putGroup(fieldGroups,"weapons","weapons");putGroup(fieldGroups,"pathing","path_state","path_pending","path_available","path_points","path_target_x","path_target_y","path_next_x","path_next_y");
+        putGroup(fieldGroups,"orders","current_order","order_target_id","order_x","order_y","waypoint_count","idle","order_revision","order_changed","order_source","order_automatic","order_issued_tick","order_command_id","order_script_id","last_player_order","move_destination_x","move_destination_y","next_waypoint_x","next_waypoint_y","desired_heading","chasing_target_id","intent_type","intent_target_id","intent_target_role","is_chasing","chase_target_id","is_protecting","protect_target_id","is_building_order","build_target_id","is_reclaiming","reclaim_target_id");
+        putGroup(fieldGroups,"repair","is_repairing","repair_target_id","repair_automatic","repair_range","order_source","order_automatic","order_revision","order_issued_tick","order_command_id","order_script_id");
+        putGroup(fieldGroups,"transport","carrier_id","attached","transport_capacity","loaded_unit_ids");
+        putGroup(fieldGroups,"construction","is_construction_site","is_unfinished","construction_progress","construction_state","construction_key");
+        putGroup(fieldGroups,"build","build_progress","factory","queue_size","buildable_types");
         putGroup(fieldGroups,"production","production_items");putGroup(fieldGroups,"actions","actions","action_details");putGroup(fieldGroups,"abilities","abilities");
         putGroup(fieldGroups,"damage","last_damaged_tick","last_damage_amount","last_damage_source_id");putGroup(fieldGroups,"selection","selected");putGroup(fieldGroups,"map","visible_to_local","fogged_to_local","explored_to_local");rw.set("field_groups",fieldGroups);
         rw.set("unit_types", new LuaTable());
@@ -163,10 +174,13 @@ final class LuaProgram {
         finally { budget.end(); }
         if (metadata[0] == null) throw new IOException("缺少 rw.script{api,id,name,units}");
         if (handlers.isEmpty()) throw new IOException("至少注册一个 rw.on_tick(interval, function)");
-        return new LuaProgram(globals, rw, metadata[0], handlers, budget, runtimeCapabilities);
+        return new LuaProgram(globals, rw, metadata[0], handlers, budget, runtimeCapabilities, source,
+                sourceName == null ? "script.lua" : sourceName);
     }
 
     void tick(GameSnapshot snapshot, CommandGateway gateway, UnitPolicy policy, Map<String,Object> settings) throws Throwable {
+        if(suspendedUntil!=Integer.MIN_VALUE&&snapshot.tick<suspendedUntil)return;
+        if(suspendedUntil!=Integer.MIN_VALUE)suspendedUntil=Integer.MIN_VALUE;
         runtimeCapabilities.set(gateway.capabilities());
         for (TickHandler handler : ticks) {
             if (handler.lastTick != Integer.MIN_VALUE && snapshot.tick - handler.lastTick < handler.interval) continue;
@@ -181,12 +195,16 @@ final class LuaProgram {
                 if (++consecutiveErrors >= 3) throw new IOException("连续 3 次 Lua 异常: " + message(t), t);
                 throw t;
             } finally { budget.end(); }
+            if(suspendedUntil!=Integer.MIN_VALUE&&snapshot.tick<suspendedUntil)break;
         }
     }
 
-    void resetTickState() { for (TickHandler h : ticks) h.lastTick = Integer.MIN_VALUE; consecutiveErrors = 0; }
+    void resetTickState() { for (TickHandler h : ticks) h.lastTick = Integer.MIN_VALUE; consecutiveErrors = 0; suspendedUntil=Integer.MIN_VALUE; }
+    LuaProgram resetForNewMatch() throws IOException { return compile(source, sourceName); }
+    void resume(){suspendedUntil=Integer.MIN_VALUE;}
 
     boolean due(int tick) {
+        if(suspendedUntil!=Integer.MIN_VALUE&&tick<suspendedUntil)return false;
         for (TickHandler h : ticks)
             if (h.lastTick == Integer.MIN_VALUE || tick - h.lastTick >= h.interval) return true;
         return false;
@@ -212,10 +230,28 @@ final class LuaProgram {
         ctx.set("is_passable",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue p=a.arg(b);String movement=a.arg(b+1).optjstring("LAND").toUpperCase();float radius=(float)a.arg(b+2).optdouble(0);float x=(float)coord(p,"x"),y=(float)coord(p,"y");Object nativePassable=snapshot.pathAt(x,y,movement,radius).get("passable");if(nativePassable instanceof Boolean)return LuaValue.valueOf((Boolean)nativePassable);Map<String,Object> tile=snapshot.tileAt(x,y);if(tile.isEmpty()||Boolean.FALSE.equals(tile.get("in_bounds")))return LuaValue.FALSE;boolean water=Boolean.TRUE.equals(tile.get("water")),bridge=Boolean.TRUE.equals(tile.get("water_bridge")),cliff=Boolean.TRUE.equals(tile.get("cliff")),large=Boolean.TRUE.equals(tile.get("large_cliff_or_trees")),blocked=Boolean.TRUE.equals(tile.get("land_blocked"));boolean ok=movement.contains("AIR")?true:movement.contains("WATER")?water&&!bridge:movement.contains("HOVER")?!large:(!water||bridge)&&!cliff&&!large&&!blocked;return LuaValue.valueOf(ok);}});
         ctx.set("tile_rect",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;int tx=a.checkint(b),ty=a.checkint(b+1),w=Math.max(0,a.checkint(b+2)),h=Math.max(0,a.checkint(b+3)),step=Math.max(1,a.optint(b+4,1));int total=((w+step-1)/step)*((h+step-1)/step);if(total>1024)throw new LuaError("tile_rect 最多返回 1024 个地块");Number tw=number(snapshot.map.get("tile_width")),th=number(snapshot.map.get("tile_height"));LuaTable out=new LuaTable();if(tw==null||th==null)return out;int i=1;for(int yy=0;yy<h;yy+=step)for(int xx=0;xx<w;xx+=step)out.set(i++,value(snapshot.tileAt((float)((tx+xx+0.5)*tw.doubleValue()),(float)((ty+yy+0.5)*th.doubleValue()))));return out;}});
         ctx.set("find_path",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;LuaValue start=a.arg(b),goal=a.arg(b+1);String movement=a.arg(b+2).optjstring("LAND");LuaValue options=a.arg(b+3);float radius=options.istable()?(float)options.get("radius").optdouble(0):0f;int maxNodes=options.istable()?options.get("max_nodes").optint(4096):4096;return value(snapshot.findPath((float)coord(start,"x"),(float)coord(start,"y"),(float)coord(goal,"x"),(float)coord(goal,"y"),movement,radius,maxNodes));}});
+        ctx.set("path_clearance",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);LuaValue start=a.arg(b),goal=a.arg(b+1),o=a.arg(b+3);String movement=a.arg(b+2).optjstring("LAND");float radius=o.istable()?(float)o.get("radius").optdouble(0):0f;int samples=o.istable()?o.get("max_samples").optint(16):16;return value(snapshot.pathClearance((float)coord(start,"x"),(float)coord(start,"y"),(float)coord(goal,"x"),(float)coord(goal,"y"),movement,radius,samples));}});
+        ctx.set("reachable_area",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);LuaValue p=a.arg(b),o=a.arg(b+2);String movement=a.arg(b+1).optjstring("LAND");float radius=o.istable()?(float)o.get("radius").optdouble(0):0f,escape=o.istable()?(float)o.get("escape_distance").optdouble(160):160f;int nodes=o.istable()?o.get("max_nodes").optint(256):256;return value(snapshot.reachableArea((float)coord(p,"x"),(float)coord(p,"y"),movement,radius,nodes,escape));}});
+         ctx.set("is_dead_end",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);LuaValue p=a.arg(b),o=a.arg(b+2);String movement=a.arg(b+1).optjstring("LAND");float radius=o.istable()?(float)o.get("radius").optdouble(0):0f,escape=o.istable()?(float)o.get("escape_distance").optdouble(160):160f;int nodes=o.istable()?o.get("max_nodes").optint(256):256;Object dead=snapshot.reachableArea((float)coord(p,"x"),(float)coord(p,"y"),movement,radius,nodes,escape).get("dead_end");return dead instanceof Boolean?LuaValue.valueOf((Boolean)dead):LuaValue.NIL;}});
+         ctx.set("find_escape",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);UnitSnapshot unit=snapshot.get(id(a.arg(b)));LuaValue o=a.arg(b+2);ArrayList<UnitSnapshot> threats=new ArrayList<>();for(Long threatId:ids(a.arg(b+1))){UnitSnapshot threat=snapshot.get(threatId);if(threat!=null&&!threat.dead&&!threat.deleted)threats.add(threat);}float step=o.istable()?(float)o.get("step").optdouble(220):220f,safety=o.istable()?(float)o.get("safety").optdouble(20):20f;int samples=o.istable()?o.get("samples").optint(16):16,nodes=o.istable()?o.get("max_nodes").optint(384):384;return value(snapshot.findEscape(unit,threats,step,samples,safety,nodes));}});
+         ctx.set("predict_trajectory",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);UnitSnapshot unit=snapshot.get(id(a.arg(b)));LuaValue o=a.arg(b+1);int horizon=o.istable()?o.get("horizon").optint(180):180,step=o.istable()?o.get("step").optint(30):30;return value(snapshot.predictTrajectory(unit,horizon,step));}});
+         ctx.set("find_safe_route",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);UnitSnapshot unit=snapshot.get(id(a.arg(b)));LuaValue o=a.arg(b+2);ArrayList<UnitSnapshot> threatList=threatSnapshots(snapshot,a.arg(b+1),o);Long preserve=optionalId(o.istable()?o.get("preserve_target"):LuaValue.NIL);float step=o.istable()?(float)o.get("step").optdouble(180):180f,safety=o.istable()?(float)o.get("safety").optdouble(20):20f;int samples=o.istable()?o.get("samples").optint(16):16,nodes=o.istable()?o.get("max_nodes").optint(256):256,horizon=o.istable()?o.get("horizon").optint(180):180,forecastStep=o.istable()?o.get("forecast_step").optint(30):30;boolean preserveRange=o.istable()&&o.get("preserve_range").optboolean(false);return value(snapshot.findSafeRoute(unit,threatList,preserve,horizon,forecastStep,step,samples,safety,nodes,preserveRange));}});
+         ctx.set("dynamic_route",ctx.get("find_safe_route"));
+         ctx.set("threat_assessment",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);UnitSnapshot unit=snapshot.get(id(a.arg(b)));LuaValue o=a.arg(b+2);ArrayList<UnitSnapshot> threatList=threatSnapshots(snapshot,a.arg(b+1),o);int horizon=o.istable()?o.get("horizon").optint(180):180,step=o.istable()?o.get("forecast_step").optint(30):30;float safety=o.istable()?(float)o.get("safety").optdouble(20):20f,radius=o.istable()?(float)o.get("surround_radius").optdouble(3000):3000f,trigger=o.istable()?(float)o.get("surround_trigger").optdouble(1200):1200f;return value(snapshot.threatAssessment(unit,threatList,horizon,step,safety,radius,trigger));}});
+         ctx.set("threat_retreat",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);UnitSnapshot unit=snapshot.get(id(a.arg(b)));LuaValue o=a.arg(b+2);ArrayList<UnitSnapshot> threatList=threatSnapshots(snapshot,a.arg(b+1),o);Long preserve=optionalId(o.istable()?o.get("preserve_target"):LuaValue.NIL);int horizon=o.istable()?o.get("horizon").optint(180):180,forecastStep=o.istable()?o.get("forecast_step").optint(30):30;float step=o.istable()?(float)o.get("step").optdouble(180):180f,safety=o.istable()?(float)o.get("safety").optdouble(20):20f,radius=o.istable()?(float)o.get("surround_radius").optdouble(3000):3000f,trigger=o.istable()?(float)o.get("surround_trigger").optdouble(1200):1200f;int samples=o.istable()?o.get("samples").optint(16):16,nodes=o.istable()?o.get("max_nodes").optint(256):256;boolean preserveRange=o.istable()&&o.get("preserve_range").optboolean(false);return value(snapshot.threatRetreat(unit,threatList,preserve,horizon,forecastStep,step,samples,safety,nodes,radius,trigger,preserveRange));}});
+        ctx.set("fire_solution",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);return value(gateway.fireSolution(snapshot,id(a.arg(b)),id(a.arg(b+1)),a.arg(b+2).optint(-1)));}});
+        ctx.set("can_fire_at",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);Object v=gateway.fireSolution(snapshot,id(a.arg(b)),id(a.arg(b+1)),a.arg(b+2).optint(-1)).get("can_fire");return v instanceof Boolean?LuaValue.valueOf((Boolean)v):LuaValue.NIL;}});
+        ctx.set("range_margin",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);return value(gateway.fireSolution(snapshot,id(a.arg(b)),id(a.arg(b+1)),a.arg(b+2).optint(-1)).get("margin"));}});
+        ctx.set("time_until_can_fire",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);return value(gateway.fireSolution(snapshot,id(a.arg(b)),id(a.arg(b+1)),a.arg(b+2).optint(-1)).get("time_until_fire"));}});
+        ctx.set("predict_position",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);LuaValue u=a.arg(b);double ticks=Math.max(0,a.checkdouble(b+1));return point(coord(u,"x")+u.get("velocity_x").optdouble(0)*ticks,coord(u,"y")+u.get("velocity_y").optdouble(0)*ticks);}});
+        ctx.set("time_to_stop",new VarArgFunction(){@Override public Varargs invoke(Varargs a){LuaValue u=a.arg(contextBase(a));double deceleration=u.get("deceleration").optdouble(0);return deceleration>0?LuaValue.valueOf(Math.max(0,u.get("real_speed").optdouble(0))/deceleration):LuaValue.NIL;}});
+        ctx.set("braking_distance",new VarArgFunction(){@Override public Varargs invoke(Varargs a){LuaValue u=a.arg(contextBase(a));double speed=Math.max(0,u.get("real_speed").optdouble(0)),deceleration=u.get("deceleration").optdouble(0);return deceleration>0?LuaValue.valueOf(speed*speed/(2*deceleration)):LuaValue.NIL;}});
+        ctx.set("time_to_heading",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);LuaValue u=a.arg(b);double turn=u.get("turn_speed").optdouble(0),delta=Math.abs(normalizeDegrees(a.checkdouble(b+1)-u.get("heading").optdouble(0)));return turn>0?LuaValue.valueOf(delta/turn):LuaValue.NIL;}});
+        ctx.set("intercept_point",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a);return interceptPoint(a.arg(b),a.arg(b+1),a.arg(b+2));}});
         ctx.set("units", queryFunction(snapshot, policy, -1,unitTables));
         ctx.set("self_units", queryFunction(snapshot, policy, 0,unitTables));
-        ctx.set("enemies", queryFunction(snapshot, policy, 1,unitTables));
-        ctx.set("allies", queryFunction(snapshot, policy, 2,unitTables));
+        ctx.set("enemies", queryFunction(snapshot, policy, 2,unitTables));
+        ctx.set("allies", queryFunction(snapshot, policy, 1,unitTables));
         ctx.set("selected", new VarArgFunction() {
             @Override public Varargs invoke(Varargs a) {
                 int base=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;UnitFilter filter=UnitFilter.parse(a.arg(base));
@@ -239,7 +275,7 @@ final class LuaProgram {
                 UnitFilter parsed=UnitFilter.parse(filter);
                 UnitSnapshot best = null; double bestD = range * range,fx=coord(from,"x"),fy=coord(from,"y");
                 for (UnitSnapshot u : snapshot.units) {
-                    if (u.relation != 1 || u.dead || u.deleted || !parsed.matches(u)) continue;
+                    if (u.relation != 2 || u.dead || u.deleted || !parsed.matches(u)) continue;
                     double dx = fx - u.x, dy = fy - u.y, d = dx * dx + dy * dy;
                     if (d < bestD || d == bestD && (best == null || u.id < best.id)) { bestD = d; best = u; }
                 }
@@ -261,6 +297,50 @@ final class LuaProgram {
                 return result;
             }
         });
+        ctx.set("repair_status",new VarArgFunction(){@Override public Varargs invoke(Varargs a){
+            if(!wants("repair")){LuaTable out=new LuaTable();out.set("available",LuaValue.FALSE);return out;}
+            int base=contextBase(a);return value(snapshot.repairStatus(snapshot.get(id(a.arg(base)))));
+        }});
+        ctx.set("repair_targets",new VarArgFunction(){@Override public Varargs invoke(Varargs a){
+            LuaTable out=new LuaTable();if(!wants("repair"))return out;int base=contextBase(a);UnitSnapshot repairer=snapshot.get(id(a.arg(base)));LuaValue o=a.arg(base+1);
+            String relation=o.istable()?o.get("relation").optjstring("both"):"both";int limit=o.istable()?o.get("max_results").optint(128):128,index=1;
+            for(UnitSnapshot target:gateway.repairTargets(snapshot,repairer,relation,limit))out.set(index++,exposedUnit(target,unitTables,policy));return out;
+        }});
+        ctx.set("construction_targets",new VarArgFunction(){@Override public Varargs invoke(Varargs a){
+            LuaTable out=new LuaTable();if(!wants("construction"))return out;int base=contextBase(a);LuaValue o=a.arg(base);
+            String relation=o.istable()?o.get("relation").optjstring("self"):"self";
+            boolean includeAllies=o.istable()&&o.get("include_allies").optboolean(false);
+            int limit=o.istable()?Math.max(1,Math.min(512,o.get("max_results").optint(256))):256,index=1;
+            LuaValue origin=o.istable()?o.get("origin"):LuaValue.NIL;double ox=0,oy=0;boolean ordered=false;
+            if(!origin.isnil()){UnitSnapshot originUnit=null;try{originUnit=snapshot.get(id(origin));}catch(Throwable ignored){}
+                if(originUnit!=null){ox=originUnit.x;oy=originUnit.y;ordered=true;}else if(origin.istable()){ox=coord(origin,"x");oy=coord(origin,"y");ordered=true;}}
+            double maxDistance=o.istable()?Math.max(0,o.get("max_distance").optdouble(Double.MAX_VALUE)):Double.MAX_VALUE;
+            double maxDistanceSquared=maxDistance==Double.MAX_VALUE?Double.MAX_VALUE:maxDistance*maxDistance;
+            ArrayList<UnitSnapshot> candidates=new ArrayList<>();
+            for(UnitSnapshot u:snapshot.units){
+                if(u.dead||u.deleted||!u.building||u.buildProgress>=1.0f)continue;
+                boolean accepted="all".equalsIgnoreCase(relation)||"both".equalsIgnoreCase(relation)&&(u.relation==0||u.relation==1)
+                        ||"ally".equalsIgnoreCase(relation)&&u.relation==1||"self".equalsIgnoreCase(relation)&&u.relation==0;
+                if(!accepted&&includeAllies&&u.relation==1)accepted=true;if(!accepted)continue;
+                if(ordered){double dx=u.x-ox,dy=u.y-oy;if(dx*dx+dy*dy>maxDistanceSquared)continue;}candidates.add(u);
+            }
+            if(ordered){final double fx=ox,fy=oy;candidates.sort((left,right)->{double ldx=left.x-fx,ldy=left.y-fy,rdx=right.x-fx,rdy=right.y-fy;int compared=Double.compare(ldx*ldx+ldy*ldy,rdx*rdx+rdy*rdy);return compared!=0?compared:Long.compare(left.id,right.id);});}
+            for(UnitSnapshot u:candidates){out.set(index++,exposedUnit(u,unitTables,policy));if(index>limit)break;}return out;
+        }});
+        ctx.set("construction_check",new VarArgFunction(){@Override public Varargs invoke(Varargs a){
+            int base=contextBase(a);UnitSnapshot builder=snapshot.get(id(a.arg(base))),target=snapshot.get(id(a.arg(base+1)));
+            LuaValue o=a.arg(base+2);int samples=o.istable()?o.get("samples").optint(12):12;
+            float approach=o.istable()?(float)o.get("max_approach").optdouble(240):240f;
+            int nodes=o.istable()?o.get("max_nodes").optint(512):512;
+            boolean strict=o.istable()&&o.get("require_buildable_type").optboolean(false);
+            int offset=o.istable()?o.get("candidate_offset").optint(0):0;
+            int pathChecks=o.istable()?o.get("max_path_checks").optint(3):3;
+            return value(gateway.constructionCheck(snapshot,builder,target,samples,approach,nodes,strict,offset,pathChecks));
+        }});
+        ctx.set("construction_status",new VarArgFunction(){@Override public Varargs invoke(Varargs a){
+            int base=contextBase(a);UnitSnapshot builder=snapshot.get(id(a.arg(base)));LuaValue targetValue=a.arg(base+1);
+            UnitSnapshot target=targetValue.isnil()?null:snapshot.get(id(targetValue));return value(snapshot.constructionStatus(builder,target));
+        }});
         ctx.set("groups",new VarArgFunction(){@Override public Varargs invoke(Varargs ignored){
             LinkedHashMap<String,ArrayList<UnitSnapshot>> groups=new LinkedHashMap<>();
             for(UnitSnapshot u:snapshot.units)if(u.relation==0&&!u.dead&&!u.deleted&&definition.acceptsUnit(u.typeId,u.typeName)&&policy.enabled(u)){
@@ -272,7 +352,10 @@ final class LuaProgram {
                 g.set("id",entry.getKey());g.set("units",units);g.set("count",entry.getValue().size());g.set("center",point(x/entry.getValue().size(),y/entry.getValue().size()));out.set(gi++,g);
             }return out;
         }});
-        ctx.set("group_of",new VarArgFunction(){@Override public Varargs invoke(Varargs a){long unitId=id(a.arg(a.narg()));String group=policy.group(unitId);return group==null?LuaValue.NIL:LuaValue.valueOf(group);}});        command(ctx, "move", a -> gateway.move(definition.id, snapshot, controlledIds(a.arg(2), snapshot, policy),
+        ctx.set("group_of",new VarArgFunction(){@Override public Varargs invoke(Varargs a){long unitId=id(a.arg(a.narg()));String group=policy.group(unitId);return group==null?LuaValue.NIL:LuaValue.valueOf(group);}});
+        command(ctx,"steer",a->{LuaValue o=a.arg(5);return gateway.steer(definition.id,snapshot,controlledIds(a.arg(2),snapshot,policy),(float)a.checkdouble(3),(float)a.checkdouble(4),o.istable()?(float)o.get("deadband").optdouble(16):16f,o.istable()?o.get("refresh_ticks").optint(24):24);});
+        command(ctx,"move_keep_target",a->{LuaValue o=a.arg(6);return gateway.moveKeepTarget(definition.id,snapshot,controlledIds(a.arg(2),snapshot,policy),(float)a.checkdouble(3),(float)a.checkdouble(4),id(a.arg(5)),o.istable()?(float)o.get("deadband").optdouble(16):16f,o.istable()?o.get("refresh_ticks").optint(24):24);});
+        command(ctx, "move", a -> gateway.move(definition.id, snapshot, controlledIds(a.arg(2), snapshot, policy),
                 (float) a.checkdouble(3), (float) a.checkdouble(4), a.optboolean(5, false)));
         command(ctx, "attack_move", a -> gateway.attackMove(definition.id, snapshot, controlledIds(a.arg(2), snapshot, policy),
                 (float) a.checkdouble(3), (float) a.checkdouble(4), a.optboolean(5, false)));
@@ -282,6 +365,27 @@ final class LuaProgram {
                 id(a.arg(3)), a.optboolean(4, false)));
         command(ctx, "guard", a -> gateway.guard(definition.id, snapshot, controlledIds(a.arg(2), snapshot, policy),
                 id(a.arg(3)), a.optboolean(4, false)));
+        ctx.set("assist_build",new VarArgFunction(){@Override public Varargs invoke(Varargs a){
+            try{
+                int base=contextBase(a);List<Long> requested=controlledIds(a.arg(base),snapshot,policy);
+                long targetId=id(a.arg(base+1));UnitSnapshot target=snapshot.get(targetId);LuaValue o=a.arg(base+2);
+                int samples=o.istable()?o.get("samples").optint(12):12;
+                float approach=o.istable()?(float)o.get("max_approach").optdouble(240):240f;
+                int nodes=o.istable()?o.get("max_nodes").optint(512):512;
+                int refresh=o.istable()?o.get("refresh_ticks").optint(60):60;
+                boolean strict=o.istable()&&o.get("require_buildable_type").optboolean(false);
+                boolean respect=!o.istable()||o.get("respect_player").optboolean(true);
+                int offset=o.istable()?o.get("candidate_offset").optint(0):0;
+                int pathChecks=o.istable()?o.get("max_path_checks").optint(3):3;
+                ArrayList<Long> valid=new ArrayList<>();ArrayList<Map<String,Object>> checks=new ArrayList<>();Map<String,Object> detail=null,firstValid=null;
+                for(Long builderId:requested){Map<String,Object> check=gateway.constructionCheck(snapshot,snapshot.get(builderId),target,samples,approach,nodes,strict,offset,pathChecks);checks.add(check);if(detail==null)detail=check;if(Boolean.TRUE.equals(check.get("valid"))){valid.add(builderId);if(firstValid==null)firstValid=check;}}
+                if(detail==null){detail=new LinkedHashMap<>();detail.put("available",false);detail.put("valid",false);detail.put("reachable",false);detail.put("reason","invalid_builder");detail.put("retryable",false);}
+                if(valid.isEmpty())return constructionResult(detail,null);
+                LinkedHashMap<String,Object> merged=new LinkedHashMap<>(firstValid);merged.put("validated_builders",valid.size());
+                merged.put("rejected_builders",requested.size()-valid.size());merged.put("checks",checks);
+                return constructionResult(merged,gateway.assistBuild(definition.id,snapshot,valid,targetId,refresh,respect));
+            }catch(Throwable t){LinkedHashMap<String,Object> detail=new LinkedHashMap<>();detail.put("available",false);detail.put("valid",false);detail.put("reachable",false);detail.put("reason",message(t));detail.put("retryable",false);return constructionResult(detail,null);}
+        }});
         command(ctx, "repair", a -> gateway.repair(definition.id, snapshot, controlledIds(a.arg(2), snapshot, policy),
                 id(a.arg(3)), a.optboolean(4, false)));
         command(ctx, "reclaim", a -> gateway.reclaim(definition.id, snapshot, controlledIds(a.arg(2), snapshot, policy),
@@ -300,6 +404,8 @@ final class LuaProgram {
                 a.arg(5).isnumber() ? (float)a.checkdouble(5) : null,
                 a.optboolean(6, false)));
         ctx.set("finish",new VarArgFunction(){@Override public Varargs invoke(Varargs a){ArrayList<Long> done=new ArrayList<>();if(a.arg(2).isnil()){for(UnitSnapshot u:snapshot.units)if(u.relation==0&&definition.acceptsUnit(u.typeId,u.typeName)&&policy.enabled(u))done.add(u.id);}else done.addAll(controlledIds(a.arg(2),snapshot,policy));for(Long id:done)policy.finish(id);LuaTable r=new LuaTable();r.set("accepted",LuaValue.TRUE);r.set("finished",done.size());return r;}});
+        ctx.set("suspend",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int b=contextBase(a),ticks=Math.max(1,Math.min(36000,a.checkint(b)));long wake=(long)snapshot.tick+ticks;suspendedUntil=wake>Integer.MAX_VALUE?Integer.MAX_VALUE:(int)wake;LuaTable r=new LuaTable();r.set("accepted",LuaValue.TRUE);r.set("wake_tick",suspendedUntil);return r;}});
+        ctx.set("resume",new VarArgFunction(){@Override public Varargs invoke(Varargs ignored){suspendedUntil=Integer.MIN_VALUE;LuaTable r=new LuaTable();r.set("accepted",LuaValue.TRUE);return r;}});
         ctx.set("exit",new VarArgFunction(){@Override public Varargs invoke(Varargs a){int base=a.arg1().istable()&&a.arg1().get("tick").isnumber()?2:1;policy.exit(a.arg(base).optjstring(null));LuaTable r=new LuaTable();r.set("accepted",LuaValue.TRUE);return r;}});
         return ctx;
     }
@@ -335,14 +441,16 @@ final class LuaProgram {
         LuaTable t=new LuaTable();
         set(t,"id",u.id);set(t,"type_id",u.typeId);set(t,"type_name",u.typeName);set(t,"building",u.building);set(t,"orderable",u.orderable);
         set(t,"dead",u.dead);set(t,"deleted",u.deleted);
-        if(wants("team")){set(t,"team_id",u.teamId);set(t,"team_name",u.teamName);set(t,"relation",u.relation);set(t,"relation_name",u.relation==0?"self":u.relation==1?"enemy":"ally");}
+        if(wants("team")){set(t,"team_id",u.teamId);set(t,"team_name",u.teamName);set(t,"relation",u.relation);set(t,"relation_name",u.relation==0?"self":u.relation==1?"ally":"enemy");}
         if(wants("position")){set(t,"x",u.x);set(t,"y",u.y);set(t,"height",u.height);set(t,"heading",u.heading);set(t,"radius",u.radius);LuaTable p=point(u.x,u.y);p.set("height",u.height);t.set("position",p);}
         if(wants("health")){set(t,"health",u.health);set(t,"max_health",u.maxHealth);set(t,"health_ratio",u.healthRatio());set(t,"shield",u.shield);set(t,"max_shield",u.maxShield);set(t,"shield_ratio",u.shieldRatio());set(t,"combined_health_ratio",u.combinedHealthRatio());set(t,"health_missing",Math.max(0f,u.maxHealth-u.health));set(t,"shield_missing",Math.max(0f,u.maxShield-u.shield));}
         if(wants("selection"))set(t,"selected",u.selected);
         if(wants("transport")){set(t,"attached",u.attached);set(t,"carrier_id",u.carrierId);}
+        if(wants("construction")){set(t,"is_construction_site",u.building);set(t,"is_unfinished",u.building&&u.buildProgress<1.0f);set(t,"construction_progress",u.buildProgress);set(t,"construction_state",u.building?(u.buildProgress<1.0f?"unfinished":"complete"):"not_building");set(t,"construction_key",GameSnapshot.constructionKey(u));}
         if(wants("build")||wants("production")){set(t,"factory",u.factory);set(t,"build_progress",u.buildProgress);set(t,"queue_size",u.queueSize);}
         if(wants("movement")||wants("pathing")){set(t,"movement_type",u.movementType);set(t,"max_move_speed",u.maxMoveSpeed);}
         if(wants("combat")||wants("weapons")){set(t,"attack_range",u.attackRange);set(t,"weapon_count",u.weaponCount);set(t,"target_id",u.targetId);}
+        if(wants("repair"))set(t,"repair_range",u.attackRange);
         if(wants("orders")||wants("pathing")){set(t,"waypoint_count",u.waypointCount);set(t,"current_order",u.currentOrder);set(t,"order_target_id",u.orderTargetId);set(t,"order_x",u.orderX);set(t,"order_y",u.orderY);set(t,"idle",u.currentOrder==null);}
         for(Map.Entry<String,Object> e:u.extras.entrySet())t.set(e.getKey(),value(e.getValue()));
         if(wants("actions")){LuaTable actions=new LuaTable();int ai=1;for(String id:u.actionIds)actions.set(ai++,id);t.set("actions",actions);}
@@ -356,7 +464,7 @@ final class LuaProgram {
         UnitFilter(Integer relation,Boolean orderable,Boolean selected,Boolean building,Set<String> types,boolean allTypes){this.relation=relation;this.orderable=orderable;this.selected=selected;this.building=building;this.types=types;this.allTypes=allTypes;}
         static UnitFilter parse(LuaValue filter){
             if(!filter.istable())return ANY;
-            Integer relation=null;LuaValue relationValue=filter.get("relation");if(!relationValue.isnil()){String value=relationValue.tojstring();if("self".equalsIgnoreCase(value))relation=0;else if("enemy".equalsIgnoreCase(value))relation=1;else if("ally".equalsIgnoreCase(value))relation=2;else if(!"all".equalsIgnoreCase(value))relation=Integer.MIN_VALUE;}
+            Integer relation=null;LuaValue relationValue=filter.get("relation");if(!relationValue.isnil()){String value=relationValue.tojstring();if("self".equalsIgnoreCase(value))relation=0;else if("enemy".equalsIgnoreCase(value))relation=2;else if("ally".equalsIgnoreCase(value))relation=1;else if(!"all".equalsIgnoreCase(value))relation=Integer.MIN_VALUE;}
             LuaValue orderable=filter.get("orderable"),selected=filter.get("selected"),building=filter.get("building");
             LuaValue declared=filter.get("types");if(declared.isnil())declared=filter.get("type");if(declared.isnil())declared=filter.get("unit");
             LinkedHashSet<String> types=null;boolean all=declared.isnil();if(!all){types=new LinkedHashSet<>();if(declared.isstring())types.add(declared.tojstring());else if(declared.istable())for(int i=1;;i++){LuaValue value=declared.get(i);if(value.isnil())break;types.add(value.tojstring());}all=types.contains("All")||types.contains("*");}
@@ -382,6 +490,13 @@ final class LuaProgram {
         if (value.istable()) for (int i=1; !value.get(i).isnil(); i++) result.add(id(value.get(i)));
         return result;
     }
+    private static ArrayList<UnitSnapshot> threatSnapshots(GameSnapshot snapshot,LuaValue value,LuaValue options){
+        ArrayList<UnitSnapshot> result=new ArrayList<>();int limit=options.istable()?Math.max(1,Math.min(12,options.get("max_threats").optint(8))):8;
+        for(Long threatId:ids(value)){UnitSnapshot threat=snapshot.get(threatId);if(threat!=null&&!threat.dead&&!threat.deleted){result.add(threat);if(result.size()>=limit)break;}}
+        return result;
+    }
+    private static Long optionalId(LuaValue value){return value==null||value.isnil()?null:id(value);}
+    private static int contextBase(Varargs args){return args.arg1().istable()&&args.arg1().get("tick").isnumber()?2:1;}
     private static long id(LuaValue value) { return value.istable() ? value.get("id").checklong() : value.checklong(); }
     private static double coord(LuaValue value, String name) {
         LuaValue direct = value.get(name); if (!direct.isnil()) return direct.checkdouble();
@@ -415,7 +530,16 @@ final class LuaProgram {
     }
     private static String scalar(LuaValue v){if(v.isnil())return null;if(v.isboolean())return Boolean.toString(v.toboolean());if(v.isnumber())return Double.toString(v.todouble());return v.tojstring();}
     private static Double numberOrNull(LuaValue v){return v.isnumber()?v.todouble():null;}
-    private static LuaTable result(CommandGateway.Result r) { LuaTable t=new LuaTable();t.set("accepted",LuaValue.valueOf(r.accepted));if(r.reason!=null)t.set("reason",r.reason);if(r.commandId>=0)t.set("command_id",r.commandId);return t; }
+    private static LuaTable result(CommandGateway.Result r) { LuaTable t=new LuaTable();t.set("accepted",LuaValue.valueOf(r.accepted));t.set("issued",LuaValue.valueOf(r.issued));if(r.reason!=null)t.set("reason",r.reason);if(r.commandId>=0)t.set("command_id",r.commandId);return t; }
+    private static LuaTable constructionResult(Map<String,Object> detail,CommandGateway.Result command){
+        LuaTable out=(LuaTable)value(detail);boolean valid=Boolean.TRUE.equals(detail.get("valid"));
+        out.set("accepted",LuaValue.valueOf(command!=null&&command.accepted));
+        out.set("issued",LuaValue.valueOf(command!=null&&command.issued));
+        if(command!=null){if(command.reason!=null)out.set("command_reason",command.reason);if(command.commandId>=0)out.set("command_id",command.commandId);}
+        if(!valid&&out.get("reason").isnil())out.set("reason","construction_check_failed");return out;
+    }
+    private static LuaValue interceptPoint(LuaValue chaser,LuaValue target,LuaValue options){double sx=coord(chaser,"x"),sy=coord(chaser,"y"),tx=coord(target,"x"),ty=coord(target,"y"),vx=target.get("velocity_x").optdouble(0),vy=target.get("velocity_y").optdouble(0);double speed=options.istable()?options.get("speed").optdouble(chaser.get("max_move_speed").optdouble(0)):chaser.get("max_move_speed").optdouble(0),max=options.istable()?options.get("max_ticks").optdouble(180):180;if(speed<=0)return point(tx,ty);double dx=tx-sx,dy=ty-sy,a=vx*vx+vy*vy-speed*speed,b=2*(dx*vx+dy*vy),c=dx*dx+dy*dy,t;if(Math.abs(a)<1e-9)t=Math.abs(b)<1e-9?0:-c/b;else{double d=b*b-4*a*c;if(d<0)t=0;else{double r=Math.sqrt(d),t1=(-b-r)/(2*a),t2=(-b+r)/(2*a);t=t1>=0&&t2>=0?Math.min(t1,t2):Math.max(t1,t2);}}t=Math.max(0,Math.min(max,t));LuaTable out=point(tx+vx*t,ty+vy*t);out.set("ticks",t);return out;}
+    private static double normalizeDegrees(double value){value%=360;if(value>180)value-=360;if(value<-180)value+=360;return value;}
     private static LuaTable stringTable(String[] values){LuaTable t=new LuaTable();for(int i=0;i<values.length;i++)t.set(i+1,values[i]);return t;}
     private static void putGroup(LuaTable table,String group,String...fields){for(String field:fields)table.set(field,group);}
     private static String join(String[] values){StringBuilder b=new StringBuilder();for(String v:values){if(b.length()>0)b.append(',');b.append(v);}return b.toString();}

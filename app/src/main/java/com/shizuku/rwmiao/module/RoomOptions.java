@@ -123,7 +123,7 @@ public final class RoomOptions {
             if (activity != null) return activity;
         }
         try {
-            Object activity = host.findField(listener.getClass(), "f180a").get(listener);
+            Object activity = host.findField(listener.getClass(), "a").get(listener);
             return activity instanceof Activity ? (Activity) activity : null;
         } catch (Throwable ignored) {
             return null;
@@ -210,7 +210,7 @@ public final class RoomOptions {
         Class<?> commandClass = loader.loadClass(host.target("gameFramework.e"));
         banReflection = createBanReflection(commandClass);
 
-        Method validate = commandClass.getDeclaredMethod("i");
+        Method validate = host.findCompatibleMethod(commandClass, "i");
         banValidateHook = host.hookExecutable(validate, chain -> {
             String bannedUnitName = bannedUnitNameInCommand(chain.getThisObject());
             if (bannedUnitName != null) {
@@ -220,14 +220,14 @@ public final class RoomOptions {
             return chain.proceed();
         });
 
-        Method execute = commandClass.getDeclaredMethod("h");
+        Method execute = host.findCompatibleMethod(commandClass, "h");
         banExecuteHook = host.hookExecutable(execute, chain -> {
             if (bannedUnitNameInCommand(chain.getThisObject()) != null) return null;
             return chain.proceed();
         });
 
         Class<?> networkClass = loader.loadClass(host.target("gameFramework.j.ae"));
-        Method commandIngress = networkClass.getDeclaredMethod("a", commandClass);
+        Method commandIngress = host.findCompatibleMethod(networkClass, "a", commandClass);
         banCommandIngressHook = host.hookExecutable(commandIngress, chain -> {
             String bannedUnitName = bannedUnitNameInCommand(chain.getArg(0));
             if (bannedUnitName != null) {
@@ -238,7 +238,7 @@ public final class RoomOptions {
             return chain.proceed();
         });
 
-        Method desyncMessage = networkClass.getDeclaredMethod(
+        Method desyncMessage = host.findCompatibleMethod(networkClass,
                 "a", String.class, boolean.class);
         desyncMessageHook = host.hookExecutable(desyncMessage, chain -> {
             Object message = chain.getArg(0);
@@ -256,7 +256,7 @@ public final class RoomOptions {
         });
 
         Class<?> gameClass = loader.loadClass(host.target("game.i"));
-        Method startGame = gameClass.getDeclaredMethod(
+        Method startGame = host.findCompatibleMethod(gameClass,
                 "a", boolean.class, boolean.class, int.class);
         banGameStartHook = host.hookExecutable(startGame, chain -> {
             Object result = chain.proceed();
@@ -267,7 +267,7 @@ public final class RoomOptions {
         try {
             Class<?> queueClass = loader.loadClass(host.target("game.units.d.r"));
             Class<?> actionClass = loader.loadClass(host.target("game.units.a.s"));
-            Method enqueue = queueClass.getDeclaredMethod("a", actionClass, boolean.class);
+            Method enqueue = host.findCompatibleMethod(queueClass, "a", actionClass, boolean.class);
             productionQueueHook = host.hookExecutable(enqueue, chain -> {
                 Object action = chain.getArg(0);
                 Object cancel = chain.getArg(1);
@@ -331,7 +331,7 @@ public final class RoomOptions {
 
     private void installUnitCapHooks() throws Throwable {
         Class<?> networkClass = loader.loadClass(host.target("gameFramework.j.ae"));
-        Method resetNetwork = networkClass.getDeclaredMethod("a", boolean.class);
+        Method resetNetwork = host.findCompatibleMethod(networkClass, "a", boolean.class);
         networkCapHook = host.hookExecutable(resetNetwork, chain -> {
             Object result = chain.proceed();
             forceNetworkUnitCap(chain.getThisObject());
@@ -339,7 +339,7 @@ public final class RoomOptions {
         });
 
         Class<?> gameClass = loader.loadClass(host.target("game.i"));
-        Method startGame = gameClass.getDeclaredMethod(
+        Method startGame = host.findCompatibleMethod(gameClass,
                 "a", boolean.class, boolean.class, int.class);
         gameCapHook = host.hookExecutable(startGame, chain -> {
             Object result = chain.proceed();

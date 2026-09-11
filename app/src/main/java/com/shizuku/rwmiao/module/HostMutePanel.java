@@ -76,7 +76,7 @@ final class HostMutePanel {
         connectionClass = loader.loadClass(host.target("gameFramework.j.c"));
         teamClass = loader.loadClass(host.target("game.p"));
 
-        commandIngress = networkClass.getDeclaredMethod("a", commandClass);
+        commandIngress = host.findCompatibleMethod(networkClass, "a", commandClass);
         commandIngress.setAccessible(true);
         networkServerMode = host.findField(networkClass, "D");
         networkConnected = host.findField(networkClass, "C");

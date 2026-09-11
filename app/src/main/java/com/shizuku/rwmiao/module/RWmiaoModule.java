@@ -29,9 +29,18 @@ import static com.shizuku.rwmiao.config.SettingsContract.*;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.Enumeration;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
@@ -43,6 +52,8 @@ public final class RWmiaoModule extends XposedModule {
     private static final String ORIGINAL_PREFIX = "com.corrodinggames.rts";
     private String targetPrefix = ORIGINAL_PREFIX;
     private String loadedPackageName;
+    private volatile Set<String> targetDexClasses = Collections.emptySet();
+    private volatile CompatibilityResolver compatibilityResolver;
     private static final int MODULE_MENU_ID = 0x52574D;
     private static final String MAIN_MENU_BUTTON_TAG = "com.shizuku.rwmiao.main_menu_button";
 
@@ -99,9 +110,9 @@ public final class RWmiaoModule extends XposedModule {
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         ClassLoader loader = param.getDefaultClassLoader();
         loadedPackageName = param.getPackageName();
-        if (!isRustedWarfareVariant(loader, loadedPackageName)) {
-            return;
-        }
+        if (!isRustedWarfareVariant(loader, loadedPackageName)) return;
+        compatibilityResolver = CompatibilityResolver.load(
+                this, targetPrefix, targetDexClasses);
         synchronized (installedLoaders) {
             if (!installedLoaders.add(loader)) {
                 return;
@@ -112,188 +123,93 @@ public final class RWmiaoModule extends XposedModule {
             gameLoader = loader;
             startActivationHeartbeat();
             installApplicationBootstrap();
-            gameSyncTracker = new GameSyncTracker(this, loader);
-            try {
-                gameSyncTracker.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install multiplayer resync lifecycle tracker", t);
-            }
-            try {
-                hookMenu(loader);
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install in-game menu hook", t);
-            }
-            try {
-                hookMainMenu(loader);
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install main-menu button hook", t);
-            }
-            try {
-                noFogFeature = new NoFog(this, loader);
-                noFogFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install noFog setup hook", t);
-            }
-            try {
-                hostMutePanelFeature = new HostMutePanel(this, loader);
-                hostMutePanelFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "安装房主禁言面板失败", t);
-            }
-            try {
-                Peek feature = new Peek(this, loader);
-                feature.install();
-                peekFeature = feature;
-            } catch (Throwable t) {
-                log(6, TAG, "安装其它队伍消息与地图标记钩子失败", t);
-            }
-            try {
-                viewAllFeature = new ViewAll(this, loader);
-                viewAllFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install view-all hook", t);
-            }
-            try {
-                playerInfoPanelFeature = new PlayerInfoPanel(this, loader);
-                playerInfoPanelFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install player info panel", t);
-            }
-            try {
-                factoryOptimizationFeature = new FactoryOptimization(this, loader);
-                factoryOptimizationFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install factory optimization hook", t);
-            }
-            try {
-                factoryExitThroughFeature = new FactoryExitThrough(this, loader);
-                factoryExitThroughFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install factory exit-through hook", t);
-            }
-            try {
-                motherRallyFeature = new MotherRally(this, loader);
-                motherRallyFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to resolve mother-unit rally capability", t);
-            }
-            try {
-                reinforceFeature = new AutoReinforce(this, loader);
-                reinforceFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install automatic reinforcement feature", t);
-            }
-            try {
-                drawingFeature = new Drawing(this, loader);
-                drawingFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install drawing overlay hook", t);
-            }
-            try {
-                freeSelectionFeature = new FreeSelection(this, loader);
-                freeSelectionFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install free-selection hooks", t);
-            }
-            try {
-                freeBuildFeature = new FreeBuild(this, loader);
-                freeBuildFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install free-build hooks", t);
-            }
-            try {
-                selectAllFeature = new SelectAll(this, loader);
-                selectAllFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to resolve native select-all contract", t);
-            }
-            try {
-                combatViewFeature = new CombatView(this, loader);
-                combatViewFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to resolve combat-view contract", t);
-            }
-            try {
-                segmentCommands = new SegmentCommands(this, loader);
-                segmentCommands.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install segmented command hook", t);
-            }
-            try {
-                smartPathing = new SmartPathing(this, loader, segmentCommands);
-                smartPathing.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install smart pathing hook", t);
-            }
-            try {
-                scriptManager = new ScriptManager(this, loader);
-                scriptManager.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install Lua automation framework", t);
-            }
-            try {
-                selectionActionsFeature = new SelectionActions(this, loader);
-                selectionActionsFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install selection actions", t);
-            }
-            try {
-                selectedUnitPanelFeature = new SelectedUnitPanel(this, loader);
-                selectedUnitPanelFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install selected-unit panel three-column feature", t);
-            }
-            try {
-                formationButtonsFeature = new FormationButtons(this, loader);
-                formationButtonsFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install custom formation button feature", t);
-            }
-            try {
-                multiplayerLobby = new MultiplayerLobby(this, loader);
-                multiplayerLobby.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install multiplayer M3 lobby feature", t);
-            }
-            try {
-                networkInfoFeature = new NetworkInfo(this, loader);
-                networkInfoFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install network information feature", t);
-            }
-            try {
-                proxyServiceFeature = new ProxyService(this);
-                proxyServiceFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install proxy service feature", t);
-            }
-            try {
-                gameLimitsFeature = new GameLimits(this, loader);
-                gameLimitsFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install game limits feature", t);
-            }
-            try {
-                batchPlacementFeature = new BatchPlacement(this, loader);
-                batchPlacementFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install batch placement feature", t);
-            }
-            try {
-                hostRoomOptionsFeature = new RoomOptions(this, loader);
-                hostRoomOptionsFeature.install();
-            } catch (Throwable t) {
-                log(6, TAG, "Failed to install host room options feature", t);
-            }
+            installFeatures(loader);
             if (captureCurrentApplicationContext()) refreshFeatureHooks();
-            log(4, TAG, "Rusted Warfare module hooks installed for " + loadedPackageName
-                    + " using class prefix " + targetPrefix);
             startModuleStartupUpdate();
         } catch (Throwable t) {
             synchronized (installedLoaders) {
                 installedLoaders.remove(loader);
             }
             log(6, TAG, "Failed to install Rusted Warfare hooks", t);
+        }
+    }
+
+    private void installFeatures(ClassLoader loader) {
+        gameSyncTracker = installFeature("multiplayer resync lifecycle tracker",
+                () -> new GameSyncTracker(this, loader), GameSyncTracker::install);
+        installHook("in-game menu", () -> hookMenu(loader));
+        installHook("main-menu button", () -> hookMainMenu(loader));
+        noFogFeature = installFeature("no-fog",
+                () -> new NoFog(this, loader), NoFog::install);
+        hostMutePanelFeature = installFeature("host mute panel",
+                () -> new HostMutePanel(this, loader), HostMutePanel::install);
+        peekFeature = installFeature("enemy-team messages and map pings",
+                () -> new Peek(this, loader), Peek::install);
+        viewAllFeature = installFeature("view-all",
+                () -> new ViewAll(this, loader), ViewAll::install);
+        playerInfoPanelFeature = installFeature("player info panel",
+                () -> new PlayerInfoPanel(this, loader), PlayerInfoPanel::install);
+        factoryOptimizationFeature = installFeature("factory optimization",
+                () -> new FactoryOptimization(this, loader), FactoryOptimization::install);
+        factoryExitThroughFeature = installFeature("factory exit-through",
+                () -> new FactoryExitThrough(this, loader), FactoryExitThrough::install);
+        motherRallyFeature = installFeature("mother-unit rally",
+                () -> new MotherRally(this, loader), MotherRally::install);
+        reinforceFeature = installFeature("automatic reinforcement",
+                () -> new AutoReinforce(this, loader), AutoReinforce::install);
+        drawingFeature = installFeature("drawing overlay",
+                () -> new Drawing(this, loader), Drawing::install);
+        freeSelectionFeature = installFeature("free selection",
+                () -> new FreeSelection(this, loader), FreeSelection::install);
+        freeBuildFeature = installFeature("free build",
+                () -> new FreeBuild(this, loader), FreeBuild::install);
+        selectAllFeature = installFeature("native select-all",
+                () -> new SelectAll(this, loader), SelectAll::install);
+        combatViewFeature = installFeature("combat view",
+                () -> new CombatView(this, loader), CombatView::install);
+        segmentCommands = installFeature("segmented commands",
+                () -> new SegmentCommands(this, loader), SegmentCommands::install);
+        smartPathing = installFeature("smart pathing",
+                () -> new SmartPathing(this, loader, segmentCommands), SmartPathing::install);
+        scriptManager = installFeature("Lua automation",
+                () -> new ScriptManager(this, loader), ScriptManager::install);
+        selectionActionsFeature = installFeature("selection actions",
+                () -> new SelectionActions(this, loader), SelectionActions::install);
+        selectedUnitPanelFeature = installFeature("selected-unit panel",
+                () -> new SelectedUnitPanel(this, loader), SelectedUnitPanel::install);
+        formationButtonsFeature = installFeature("formation buttons",
+                () -> new FormationButtons(this, loader), FormationButtons::install);
+        multiplayerLobby = installFeature("multiplayer lobby",
+                () -> new MultiplayerLobby(this, loader), MultiplayerLobby::install);
+        networkInfoFeature = installFeature("network information",
+                () -> new NetworkInfo(this, loader), NetworkInfo::install);
+        proxyServiceFeature = installFeature("proxy service",
+                () -> new ProxyService(this), ProxyService::install);
+        gameLimitsFeature = installFeature("game limits",
+                () -> new GameLimits(this, loader), GameLimits::install);
+        batchPlacementFeature = installFeature("batch placement",
+                () -> new BatchPlacement(this, loader), BatchPlacement::install);
+        hostRoomOptionsFeature = installFeature("host room options",
+                () -> new RoomOptions(this, loader), RoomOptions::install);
+    }
+
+    private <T> T installFeature(
+            String name, ThrowingSupplier<T> factory, ThrowingConsumer<T> installer) {
+        try {
+            T feature = factory.get();
+            installer.accept(feature);
+            return feature;
+        } catch (Throwable t) {
+            log(6, TAG, "Failed to install " + name, t);
+            return null;
+        }
+    }
+
+    private void installHook(String name, ThrowingRunnable installer) {
+        try {
+            installer.run();
+        } catch (Throwable t) {
+            log(6, TAG, "Failed to install " + name + " hook", t);
         }
     }
 
@@ -316,81 +232,90 @@ public final class RWmiaoModule extends XposedModule {
                 }
             }
         }
-                     for (String prefix : prefixes) {
+        for (String prefix : prefixes) {
             try {
                 loader.loadClass(prefix + ".appFramework.InGameActivity");
-                loader.loadClass(prefix + ".game.i");
-                loader.loadClass(prefix + ".gameFramework.f.a");
                 targetPrefix = prefix;
+                targetDexClasses = collectDexClassNames(loader);
                 return true;
             } catch (Throwable ignored) {
-                         }
-                     }
-                     String scanned = findGamePrefixInDex(loader);
-                     if (scanned != null) {
-                         targetPrefix = scanned;
-                         return true;
-                     }
-                     return false;
-                 }
-
-                 private String findGamePrefixInDex(ClassLoader loader) {
-                     try {
-                         Field pathListField = findField(loader.getClass(), "pathList");
-                         Object pathList = pathListField.get(loader);
-                         Field elementsField = findField(pathList.getClass(), "dexElements");
-                         Object elements = elementsField.get(pathList);
-                         if (!(elements instanceof Object[])) return null;
-                         String activityPrefix = null;
-                         String enginePrefix = null;
-                         String actionPrefix = null;
-                         for (Object element : (Object[]) elements) {
-                             if (element == null) continue;
-                             Field dexFileField;
-                             try {
-                                 dexFileField = findField(element.getClass(), "dexFile");
-                             } catch (Throwable ignored) {
-                                 continue;
-                             }
-                             Object dexFile = dexFileField.get(element);
-                             if (dexFile == null) continue;
-                             Method entriesMethod = findNoArgMethod(dexFile.getClass(), "entries");
-                             if (entriesMethod == null) continue;
-                             Object entriesObject = entriesMethod.invoke(dexFile);
-                             if (!(entriesObject instanceof Enumeration)) continue;
-                              Enumeration<?> entries = (Enumeration<?>) entriesObject;
-                             while (entries.hasMoreElements()) {
-                                 Object value = entries.nextElement();
-                                 if (!(value instanceof String)) continue;
-                                 String name = (String) value;
-                                 if (name.endsWith(".appFramework.InGameActivity")) {
-                                     activityPrefix = name.substring(0,
-                                             name.length() - ".appFramework.InGameActivity".length());
-                                 } else if (name.endsWith(".game.i")) {
-                                     enginePrefix = name.substring(0,
-                                             name.length() - ".game.i".length());
-                                 } else if (name.endsWith(".gameFramework.f.a")) {
-                                     actionPrefix = name.substring(0,
-                                             name.length() - ".gameFramework.f.a".length());
-                                 }
-                             }
-                          }
-                          if (activityPrefix != null && activityPrefix.equals(enginePrefix)
-                                  && activityPrefix.equals(actionPrefix)) {
-                              return activityPrefix;
-                          }
-                     } catch (Throwable t) {
-                         log(5, TAG, "Unable to scan variant dex namespace", t);
-                     }
-                     return null;
-                 }
-
-    public String target(String suffix) {
-        return targetPrefix + "." + suffix;
+            }
+        }
+        Set<String> dexClasses = collectDexClassNames(loader);
+        String scanned = findGamePrefixInDex(dexClasses);
+        if (scanned != null) {
+            targetPrefix = scanned;
+            targetDexClasses = dexClasses;
+            return true;
+        }
+        return false;
     }
 
-    String targetPrefix() {
-        return targetPrefix;
+    private Set<String> collectDexClassNames(ClassLoader loader) {
+        HashSet<String> result = new HashSet<>();
+        try {
+            Field pathListField = findField(loader.getClass(), "pathList");
+            Object pathList = pathListField.get(loader);
+            Field elementsField = findField(pathList.getClass(), "dexElements");
+            Object elements = elementsField.get(pathList);
+            if (!(elements instanceof Object[])) return result;
+            for (Object element : (Object[]) elements) {
+                if (element == null) continue;
+                Field dexFileField;
+                try {
+                    dexFileField = findField(element.getClass(), "dexFile");
+                } catch (Throwable ignored) {
+                    continue;
+                }
+                Object dexFile = dexFileField.get(element);
+                if (dexFile == null) continue;
+                Method entriesMethod = findNoArgMethod(dexFile.getClass(), "entries");
+                if (entriesMethod == null) continue;
+                Object entriesObject = entriesMethod.invoke(dexFile);
+                if (!(entriesObject instanceof Enumeration)) continue;
+                Enumeration<?> entries = (Enumeration<?>) entriesObject;
+                while (entries.hasMoreElements()) {
+                    Object value = entries.nextElement();
+                    if (value instanceof String) result.add((String) value);
+                }
+            }
+        } catch (Throwable t) {
+            log(5, TAG, "Unable to scan variant dex namespace", t);
+        }
+        return result;
+    }
+
+    private String findGamePrefixInDex(Set<String> dexClasses) {
+        final String suffix = ".appFramework.InGameActivity";
+        for (String name : dexClasses) {
+            if (name.endsWith(suffix)) {
+                return name.substring(0, name.length() - suffix.length());
+            }
+        }
+        return null;
+    }
+
+    public String target(String suffix) {
+        CompatibilityResolver resolver = compatibilityResolver;
+        return resolver == null ? targetPrefix + "." + suffix : resolver.className(suffix);
+    }
+
+    InputStream openModuleAsset(String name) throws IOException {
+        android.content.pm.ApplicationInfo info = getModuleApplicationInfo();
+        if (info == null || info.sourceDir == null) {
+            throw new IOException("Module APK path is unavailable");
+        }
+        try (ZipFile apk = new ZipFile(info.sourceDir)) {
+            ZipEntry entry = apk.getEntry("assets/" + name);
+            if (entry == null) throw new IOException("Missing module asset: " + name);
+            try (InputStream input = apk.getInputStream(entry);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                return new ByteArrayInputStream(output.toByteArray());
+            }
+        }
     }
 
     AutoReinforce reinforceFeature() {
@@ -415,6 +340,10 @@ public final class RWmiaoModule extends XposedModule {
 
     MotherRally motherRallyFeature() {
         return motherRallyFeature;
+    }
+
+    FactoryExitThrough factoryExitThroughFeature() {
+        return factoryExitThroughFeature;
     }
 
     HostMutePanel hostMutePanelFeature() {
@@ -926,8 +855,8 @@ public final class RWmiaoModule extends XposedModule {
 
     public Object findEngine(ClassLoader loader) throws Throwable {
         Class<?> engineClass = loader.loadClass(target("gameFramework.k"));
-        Method getEngine = engineClass.getDeclaredMethod("t");
-        getEngine.setAccessible(true);
+        Method getEngine = findCompatibleMethod(engineClass, "t");
+        if (getEngine == null) throw new NoSuchMethodException(engineClass.getName() + ".t()");
         return getEngine.invoke(null);
     }
 
@@ -969,8 +898,14 @@ public final class RWmiaoModule extends XposedModule {
                 fieldCache.putIfAbsent(key, field);
                 return field;
             } catch (NoSuchFieldException ignored) {
-                current = current.getSuperclass();
             }
+            CompatibilityResolver resolver = compatibilityResolver;
+            Field mapped = resolver == null ? null : resolver.field(current, name);
+            if (mapped != null) {
+                fieldCache.putIfAbsent(key, mapped);
+                return mapped;
+            }
+            current = current.getSuperclass();
         }
         missingFields.add(key);
         throw new NoSuchFieldException(name);
@@ -1109,61 +1044,52 @@ public final class RWmiaoModule extends XposedModule {
     private void refreshFeatureHooks() {
         viewAllState = null;
         factoryOptState = null;
-        try { if (noFogFeature != null) noFogFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "noFog hook refresh failed", t); }
-        try { if (viewAllFeature != null) viewAllFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "view-all hook refresh failed", t); }
-        try { if (playerInfoPanelFeature != null) playerInfoPanelFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "player info panel refresh failed", t); }
-        try { if (factoryOptimizationFeature != null) factoryOptimizationFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "factory hook refresh failed", t); }
-        try { if (factoryExitThroughFeature != null) factoryExitThroughFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "factory exit-through hook refresh failed", t); }
-        try { if (motherRallyFeature != null) motherRallyFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "mother-unit rally refresh failed", t); }
-        try { if (reinforceFeature != null) reinforceFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "reinforcement hook refresh failed", t); }
-        try { if (segmentCommands != null) segmentCommands.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "segment hook refresh failed", t); }
-        try { if (smartPathing != null) smartPathing.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "smart-path hook refresh failed", t); }
-        try { if (drawingFeature != null) drawingFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "drawing hook refresh failed", t); }
-        try { if (freeSelectionFeature != null) freeSelectionFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "free-selection hook refresh failed", t); }
-        try { if (freeBuildFeature != null) freeBuildFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "free-build hook refresh failed", t); }
-        try { if (combatViewFeature != null) combatViewFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "combat-view refresh failed", t); }
-        try { if (hostMutePanelFeature != null) hostMutePanelFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "host-mute panel hook refresh failed", t); }
-        try { if (peekFeature != null) peekFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "peek hook refresh failed", t); }
-        try { if (scriptManager != null) scriptManager.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "script hook refresh failed", t); }
-        try { if (hostRoomOptionsFeature != null) hostRoomOptionsFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "room-options hook refresh failed", t); }
-        try { if (gameLimitsFeature != null) gameLimitsFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "game-limits hook refresh failed", t); }
-        try { if (batchPlacementFeature != null) batchPlacementFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "batch-placement hook refresh failed", t); }
-        try { if (selectionActionsFeature != null) selectionActionsFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "selection hook refresh failed", t); }
-        try { if (selectedUnitPanelFeature != null) selectedUnitPanelFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "selected-unit panel hook refresh failed", t); }
-        try { if (formationButtonsFeature != null) formationButtonsFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "formation button hook refresh failed", t); }
-        try { if (multiplayerLobby != null) multiplayerLobby.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "multiplayer lobby hook refresh failed", t); }
-        try { if (networkInfoFeature != null) networkInfoFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "network information hook refresh failed", t); }
-        try { if (proxyServiceFeature != null) proxyServiceFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "proxy service hook refresh failed", t); }
+        refreshFeature("no-fog", noFogFeature, NoFog::refreshSettings);
+        refreshFeature("view-all", viewAllFeature, ViewAll::refreshSettings);
+        refreshFeature("player info panel", playerInfoPanelFeature,
+                PlayerInfoPanel::refreshSettings);
+        refreshFeature("factory optimization", factoryOptimizationFeature,
+                FactoryOptimization::refreshSettings);
+        refreshFeature("factory exit-through", factoryExitThroughFeature,
+                FactoryExitThrough::refreshSettings);
+        refreshFeature("mother-unit rally", motherRallyFeature, MotherRally::refreshSettings);
+        refreshFeature("automatic reinforcement", reinforceFeature,
+                AutoReinforce::refreshSettings);
+        refreshFeature("segmented commands", segmentCommands, SegmentCommands::refreshSettings);
+        refreshFeature("smart pathing", smartPathing, SmartPathing::refreshSettings);
+        refreshFeature("drawing overlay", drawingFeature, Drawing::refreshSettings);
+        refreshFeature("free selection", freeSelectionFeature, FreeSelection::refreshSettings);
+        refreshFeature("free build", freeBuildFeature, FreeBuild::refreshSettings);
+        refreshFeature("combat view", combatViewFeature, CombatView::refreshSettings);
+        refreshFeature("host mute panel", hostMutePanelFeature, HostMutePanel::refreshSettings);
+        refreshFeature("enemy-team messages and map pings", peekFeature, Peek::refreshSettings);
+        refreshFeature("Lua automation", scriptManager, ScriptManager::refreshSettings);
+        refreshFeature("host room options", hostRoomOptionsFeature, RoomOptions::refreshSettings);
+        refreshFeature("game limits", gameLimitsFeature, GameLimits::refreshSettings);
+        refreshFeature("batch placement", batchPlacementFeature, BatchPlacement::refreshSettings);
+        refreshFeature("selection actions", selectionActionsFeature,
+                SelectionActions::refreshSettings);
+        refreshFeature("selected-unit panel", selectedUnitPanelFeature,
+                SelectedUnitPanel::refreshSettings);
+        refreshFeature("formation buttons", formationButtonsFeature,
+                FormationButtons::refreshSettings);
+        refreshFeature("multiplayer lobby", multiplayerLobby, MultiplayerLobby::refreshSettings);
+        refreshFeature("network information", networkInfoFeature, NetworkInfo::refreshSettings);
+        refreshFeature("proxy service", proxyServiceFeature, ProxyService::refreshSettings);
+    }
+
+    private <T> void refreshFeature(String name, T feature, ThrowingConsumer<T> refresher) {
+        if (feature == null) return;
+        try {
+            refresher.accept(feature);
+        } catch (Throwable t) {
+            log(5, TAG, "Failed to refresh " + name, t);
+        }
     }
 
     public void refreshScriptSelectionAction() {
-        try { if (selectionActionsFeature != null) selectionActionsFeature.refreshSettings(); }
-        catch (Throwable t) { log(5, TAG, "script selection hook refresh failed", t); }
+        refreshFeature("script selection action", selectionActionsFeature,
+                SelectionActions::refreshSettings);
     }
 
     boolean typeSelected(Object unit, int mask, Method movementType) {
@@ -1230,28 +1156,80 @@ public final class RWmiaoModule extends XposedModule {
         Class<?> current = type;
         while (current != null) {
             for (Method method : current.getDeclaredMethods()) {
-                if (!method.getName().equals(name) || method.getParameterCount() != parameters.length) {
+                if (!method.getName().equals(name) || !parametersMatch(method, parameters)) {
                     continue;
                 }
-                Class<?>[] actual = method.getParameterTypes();
-                boolean match = true;
-                for (int i = 0; i < actual.length; i++) {
-                    if (!actual[i].isAssignableFrom(parameters[i])
-                            && !parameters[i].isAssignableFrom(actual[i])) {
-                        match = false;
-                        break;
+                method.setAccessible(true);
+                methodCache.putIfAbsent(key, method);
+                return method;
+            }
+            CompatibilityResolver resolver = compatibilityResolver;
+            if (resolver != null) {
+                for (Method method : resolver.methods(current, name)) {
+                    if (parametersMatch(method, parameters)) {
+                        methodCache.putIfAbsent(key, method);
+                        return method;
                     }
-                }
-                if (match) {
-                    method.setAccessible(true);
-                    methodCache.putIfAbsent(key, method);
-                    return method;
                 }
             }
             current = current.getSuperclass();
         }
         missingMethods.add(key);
         return null;
+    }
+
+    /**
+     * Resolves a canonical method name while requiring the runtime parameter
+     * classes to match exactly.  This is used for command emitters where a
+     * nearby assignable overload would change game state in a different way.
+     */
+    public Method findExactCompatibleMethod(Class<?> type, String name,
+                                            Class<?>... parameters) {
+        if (type == null) return null;
+        Class<?>[] wanted = parameters == null ? new Class<?>[0] : parameters;
+        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (method.getName().equals(name)
+                        && java.util.Arrays.equals(method.getParameterTypes(), wanted)) {
+                    method.setAccessible(true);
+                    return method;
+                }
+            }
+            CompatibilityResolver resolver = compatibilityResolver;
+            if (resolver == null) continue;
+            for (Method method : resolver.methods(current, name)) {
+                if (java.util.Arrays.equals(method.getParameterTypes(), wanted)) {
+                    method.setAccessible(true);
+                    return method;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean parametersMatch(Method method, Class<?>[] parameters) {
+        if (method.getParameterCount() != parameters.length) return false;
+        Class<?>[] actual = method.getParameterTypes();
+        for (int i = 0; i < actual.length; i++) {
+            if (!actual[i].isAssignableFrom(parameters[i])
+                    && !parameters[i].isAssignableFrom(actual[i])) return false;
+        }
+        return true;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingSupplier<T> {
+        T get() throws Throwable;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingConsumer<T> {
+        void accept(T value) throws Throwable;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Throwable;
     }
 
     private static final class FieldKey {

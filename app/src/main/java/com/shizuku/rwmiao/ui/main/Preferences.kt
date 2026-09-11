@@ -1,8 +1,16 @@
 package com.shizuku.rwmiao.ui.main
 
+import android.os.Handler
+import android.os.Looper
 import com.shizuku.rwmiao.ui.support.*
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -22,7 +30,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -50,13 +60,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.shizuku.rwmiao.BuildConfig
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_DARK
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_LIGHT
@@ -72,6 +83,7 @@ import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_CYAN
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_YELLOW
 import com.shizuku.rwmiao.config.SettingsContract.KEY_SELECTION_ACTION_SCALE_MASK
 import com.shizuku.rwmiao.config.SettingsContract.KEY_SHOW_GAME_DURATION
+import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_UPDATE_IGNORED_VERSION
 import com.shizuku.rwmiao.config.SettingsContract.SELECTION_ACTION_SCALE_ALL
 import com.shizuku.rwmiao.config.SettingsContract.SELECTION_ACTION_SCALE_DESELECT
 import com.shizuku.rwmiao.config.SettingsContract.SELECTION_ACTION_SCALE_FREE_BUILD
@@ -145,9 +157,7 @@ internal fun Preferences(
     onConfigurationImported: () -> Unit
 ) {
     val context = LocalContext.current
-    val updateManager = remember(context) {
-        GithubUpdateManager(context)
-    }
+    val updateManager = remember { GithubUpdateManager() }
     val scope = rememberCoroutineScope()
     var updateState by remember(settings.autoCheckUpdate) {
         mutableStateOf(
@@ -158,6 +168,7 @@ internal fun Preferences(
             }
         )
     }
+    var promptedUpdateVersion by remember { mutableStateOf<String?>(null) }
     var selectionActionScaleMask by remember {
         mutableStateOf(
             page.preferences.getInt(KEY_SELECTION_ACTION_SCALE_MASK, 0)
@@ -199,9 +210,8 @@ internal fun Preferences(
     }
 
     fun checkForUpdates() {
-        if (updateState is UpdateUiState.Checking ||
-            updateState is UpdateUiState.Downloading
-        ) return
+        if (updateState is UpdateUiState.Checking) return
+        promptedUpdateVersion = null
         updateState = UpdateUiState.Checking
         scope.launch {
             updateState = when (val result = updateManager.checkLatest()) {
@@ -214,16 +224,52 @@ internal fun Preferences(
 
     DisposableEffect(settings.autoCheckUpdate) {
         if (settings.autoCheckUpdate) {
+            val mainHandler = Handler(Looper.getMainLooper())
             val listener = object : ModuleUpdateStateBus.Listener {
                 override fun onUpdateStateChanged(state: ModuleUpdateStateBus.Snapshot) {
-                    updateState = state.toUpdateUiState()
+                    mainHandler.post { updateState = state.toUpdateUiState() }
                 }
             }
             ModuleUpdateStateBus.addListener(listener)
-            onDispose { ModuleUpdateStateBus.removeListener(listener) }
+            onDispose {
+                ModuleUpdateStateBus.removeListener(listener)
+                mainHandler.removeCallbacksAndMessages(null)
+            }
         } else {
             onDispose { }
         }
+    }
+
+    LaunchedEffect(updateState) {
+        val available = updateState as? UpdateUiState.Available ?: return@LaunchedEffect
+        val version = available.update.version
+        if (promptedUpdateVersion == version) return@LaunchedEffect
+        if (page.preferences.getString(KEY_UI_UPDATE_IGNORED_VERSION, "").orEmpty() == version) {
+            return@LaunchedEffect
+        }
+        if (page.hostActivity.isFinishing || page.hostActivity.isDestroyed) {
+            return@LaunchedEffect
+        }
+        promptedUpdateVersion = version
+        RuntimePanels.showUpdateDialog(
+            activity = page.hostActivity,
+            version = version,
+            releaseNotes = available.update.releaseNotes,
+            onJoinGroup = Runnable {
+                openModuleLink(page.hostActivity, MODULE_QQ_GROUP_URL)
+            },
+            onUpdate = Runnable {
+                openModuleLink(
+                    page.hostActivity,
+                    available.update.releaseUrl.ifBlank { MODULE_RELEASES_URL }
+                )
+            },
+            onIgnore = Runnable {
+                page.preferences.edit()
+                    .putString(KEY_UI_UPDATE_IGNORED_VERSION, version)
+                    .apply()
+            }
+        )
     }
 
     LazyColumn(
@@ -233,7 +279,7 @@ internal fun Preferences(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            ModuleHeader()
+            ModuleHeader(page)
         }
         item {
             SectionCard(compact = true) {
@@ -411,18 +457,8 @@ internal fun Preferences(
                 state = updateState,
                 autoCheck = settings.autoCheckUpdate,
                 onCheck = ::checkForUpdates,
-                onInstall = { update ->
-                    if (updateState !is UpdateUiState.Downloading) {
-                        updateState = UpdateUiState.Downloading(update)
-                        scope.launch {
-                            val result = updateManager.downloadAndInstall(update)
-                            if (result.isFailure) {
-                                updateState = UpdateUiState.Failed(
-                                    result.exceptionOrNull()?.message ?: "更新失败"
-                                )
-                            }
-                        }
-                    }
+                onOpenReleases = {
+                    openModuleLink(context, MODULE_RELEASES_URL)
                 },
                 onAutoCheck = { onSettings(settings.copy(autoCheckUpdate = it)) }
             )
@@ -465,6 +501,9 @@ internal fun Preferences(
                 }
             }
         }
+        item {
+            DeveloperAndOpenSourceSection()
+        }
     }
 
     when (networkInfoDialog) {
@@ -488,6 +527,130 @@ internal fun Preferences(
                 page.refreshRuntimeHooks()
                 proxyDialog = false
             }
+        )
+    }
+}
+
+@Composable
+private fun DeveloperAndOpenSourceSection() {
+    val context = LocalContext.current
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 0.dp
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "开发人员",
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            DeveloperRow(
+                name = "Shizuku",
+                contribution = "主要开发",
+                bilibiliUrl = SHIZUKU_BILIBILI_URL
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            DeveloperRow(
+                name = "YumeLotus",
+                contribution = "维护 图标设计"
+            )
+
+            Text(
+                "开源项目使用声明",
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            OpenSourceProjectRow(
+                name = "libxposed API",
+                url = LIBXPOSED_API_URL,
+                context = context
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            OpenSourceProjectRow(
+                name = "QuadFlask colorpicker",
+                url = QUADFLASK_COLORPICKER_URL,
+                context = context
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            OpenSourceProjectRow(
+                name = "LuaJ",
+                url = LUAJ_PROJECT_URL,
+                context = context
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun DeveloperRow(
+    name: String,
+    contribution: String,
+    bilibiliUrl: String? = null
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 28.dp, top = 10.dp, end = 12.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                contribution,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (bilibiliUrl != null) {
+            FilledTonalButton(
+                onClick = { openModuleLink(context, bilibiliUrl) }
+            ) {
+                Text("BiliBili")
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenSourceProjectRow(
+    name: String,
+    url: String,
+    context: android.content.Context
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { openModuleLink(context, url) }
+            .padding(start = 28.dp, top = 9.dp, end = 16.dp, bottom = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            url,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall
         )
     }
 }
@@ -1140,8 +1303,26 @@ private data class NetworkInfoSpoofForm(
 }
 
 @Composable
-private fun ModuleHeader() {
-    val context = LocalContext.current
+private fun ModuleHeader(page: SettingsPage) {
+    val motion = rememberInfiniteTransition(label = "module menu logo motion")
+    val logoOffset by motion.animateFloat(
+        initialValue = -3f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "module menu logo float"
+    )
+    val logoRotation by motion.animateFloat(
+        initialValue = -1.5f,
+        targetValue = 1.5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "module menu logo rotation"
+    )
     SectionCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1153,7 +1334,12 @@ private fun ModuleHeader() {
             ) {
                 ModuleLogo(
                     contentDescription = "RW miao",
-                    modifier = Modifier.size(136.dp)
+                    modifier = Modifier
+                        .size(136.dp)
+                        .graphicsLayer {
+                            translationY = logoOffset
+                            rotationZ = logoRotation
+                        }
                 )
             }
             Column(
@@ -1169,13 +1355,13 @@ private fun ModuleHeader() {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "v${BuildConfig.VERSION_NAME}",
+                    BuildConfig.VERSION_NAME,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalIconButton(onClick = {
-                        openModuleLink(context, MODULE_QQ_GROUP_URL)
+                        openModuleLink(page.hostActivity, MODULE_QQ_GROUP_URL)
                     }) {
                         Text(
                             "Q",
@@ -1185,12 +1371,12 @@ private fun ModuleHeader() {
                         )
                     }
                     FilledTonalIconButton(onClick = {
-                        openModuleLink(context, MODULE_GITHUB_URL)
+                        openModuleLink(page.hostActivity, MODULE_GITHUB_URL)
                     }) {
                         Icon(Icons.github, contentDescription = "GitHub")
                     }
                     FilledTonalIconButton(onClick = {
-                        openModuleLink(context, MODULE_BILIBILI_URL)
+                        openModuleLink(page.hostActivity, MODULE_BILIBILI_URL)
                     }) {
                         Text(
                             "B",
@@ -1199,6 +1385,32 @@ private fun ModuleHeader() {
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                     }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(
+                modifier = Modifier.align(Alignment.Top),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = {
+                        RuntimePanels.showFeedbackDialog(
+                            page.hostActivity,
+                            Runnable {
+                                openModuleLink(page.hostActivity, MODULE_QQ_GROUP_URL)
+                            },
+                            Runnable {
+                                openModuleLink(page.hostActivity, MODULE_BILIBILI_URL)
+                            },
+                            Runnable {
+                                openModuleLink(page.hostActivity, MODULE_GITHUB_URL)
+                            }
+                        )
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp)
+                ) {
+                    Text("反馈")
                 }
             }
         }
@@ -1210,7 +1422,6 @@ private sealed class UpdateUiState {
     object Checking : UpdateUiState()
     object UpToDate : UpdateUiState()
     data class Available(val update: UpdateInfo) : UpdateUiState()
-    data class Downloading(val update: UpdateInfo) : UpdateUiState()
     data class Failed(val message: String) : UpdateUiState()
 }
 
@@ -1218,7 +1429,7 @@ private fun ModuleUpdateStateBus.Snapshot.toUpdateUiState(): UpdateUiState = whe
     ModuleUpdateStateBus.Kind.CHECKING -> UpdateUiState.Checking
     ModuleUpdateStateBus.Kind.UP_TO_DATE -> UpdateUiState.UpToDate
     ModuleUpdateStateBus.Kind.AVAILABLE -> UpdateUiState.Available(
-        UpdateInfo(version, downloadUrl, sizeBytes)
+        UpdateInfo(version, downloadUrl, sizeBytes, releaseUrl, releaseNotes)
     )
     ModuleUpdateStateBus.Kind.FAILED -> UpdateUiState.Failed(message)
     ModuleUpdateStateBus.Kind.IDLE -> UpdateUiState.Idle
@@ -1228,7 +1439,7 @@ private fun ModuleUpdateStateBus.Snapshot.toUpdateUiState(): UpdateUiState = whe
 private fun UpdateSection(
     state: UpdateUiState,
     onCheck: () -> Unit,
-    onInstall: (UpdateInfo) -> Unit,
+    onOpenReleases: () -> Unit,
     autoCheck: Boolean,
     onAutoCheck: (Boolean) -> Unit
 ) {
@@ -1251,18 +1462,16 @@ private fun UpdateSection(
                     )
                 }
                 when (state) {
-                    UpdateUiState.Checking,
-                    is UpdateUiState.Downloading -> CircularProgressIndicator(
+                    UpdateUiState.Checking -> CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp
                     )
                     is UpdateUiState.Available -> FilledTonalButton(
-                        onClick = { onInstall(state.update) }
+                        onClick = onOpenReleases
                     ) { Text("立即更新") }
                     else -> IconButton(
                         onClick = onCheck,
-                        enabled = state !is UpdateUiState.Checking &&
-                            state !is UpdateUiState.Downloading
+                        enabled = state !is UpdateUiState.Checking
                     ) {
                         Icon(Icons.refresh, contentDescription = "检查更新")
                     }
@@ -1278,11 +1487,6 @@ private fun UpdateSection(
                     "发现新版本 ${state.update.version}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
-                )
-                is UpdateUiState.Downloading -> Text(
-                    "正在下载 ${state.update.version}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 is UpdateUiState.Failed -> Text(
                     state.message,

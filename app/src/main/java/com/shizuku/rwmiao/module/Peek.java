@@ -82,15 +82,13 @@ final class Peek {
         connectionClass = loader.loadClass(host.target("gameFramework.j.c"));
         teamClass = loader.loadClass(host.target("game.p"));
 
-        receiveChat = networkClass.getDeclaredMethod(
+        receiveChat = host.findCompatibleMethod(networkClass,
                 "a", connectionClass, teamClass, String.class, String.class, connectionClass);
-        receiveChat.setAccessible(true);
-        deliverMessage = networkClass.getDeclaredMethod(
+        deliverMessage = host.findCompatibleMethod(networkClass,
                 "a", connectionClass, int.class, String.class, String.class);
-        deliverMessage.setAccessible(true);
-        sameTeam = teamClass.getDeclaredMethod("c", teamClass);
+        sameTeam = host.findCompatibleMethod(teamClass, "c", teamClass);
         sameTeam.setAccessible(true);
-        teamName = teamClass.getDeclaredMethod("a", int.class);
+        teamName = host.findCompatibleMethod(teamClass, "a", int.class);
         teamName.setAccessible(true);
 
         serverMode = host.findField(networkClass, "D");
@@ -99,18 +97,17 @@ final class Peek {
         teamPlayerName = host.findField(teamClass, "w");
         teamGroup = host.findField(teamClass, "s");
 
-        executeCommand = commandClass.getDeclaredMethod("h");
+        executeCommand = host.findCompatibleMethod(commandClass, "h");
         executeCommand.setAccessible(true);
         commandTeam = host.findField(commandClass, "i");
         commandAction = host.findField(commandClass, "k");
         commandPoint = host.findField(commandClass, "l");
 
-        showMapPing = uiClass.getDeclaredMethod(
+        showMapPing = host.findCompatibleMethod(uiClass,
                 "a", float.class, float.class, teamClass, pingActionClass);
-        showMapPing.setAccessible(true);
-        pingText = pingActionClass.getDeclaredMethod("b");
+        pingText = host.findCompatibleMethod(pingActionClass, "b");
         pingText.setAccessible(true);
-        drawFrame = uiClass.getDeclaredMethod("b", float.class);
+        drawFrame = host.findCompatibleMethod(uiClass, "b", float.class);
         drawFrame.setAccessible(true);
 
         gameNetwork = host.findField(gameClass, "bU");

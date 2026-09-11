@@ -201,6 +201,84 @@ internal object Icons {
         }
     }
 
+    val arrowBack: ImageVector by lazy {
+        icon("arrowBack") {
+            moveTo(20f, 11f)
+            lineTo(7.83f, 11f)
+            lineTo(13.42f, 5.41f)
+            lineTo(12f, 4f)
+            lineTo(4f, 12f)
+            lineTo(12f, 20f)
+            lineTo(13.41f, 18.59f)
+            lineTo(7.83f, 13f)
+            lineTo(20f, 13f)
+            close()
+        }
+    }
+
+    val chevronRight: ImageVector by lazy {
+        icon("chevronRight") {
+            moveTo(9.29f, 6.71f)
+            lineTo(14.59f, 12f)
+            lineTo(9.29f, 17.29f)
+            lineTo(10.71f, 18.71f)
+            lineTo(17.41f, 12f)
+            lineTo(10.71f, 5.29f)
+            close()
+        }
+    }
+
+    val log: ImageVector by lazy {
+        icon("log") {
+            moveTo(5f, 3f)
+            lineTo(19f, 3f)
+            curveTo(20.1f, 3f, 21f, 3.9f, 21f, 5f)
+            lineTo(21f, 19f)
+            curveTo(21f, 20.1f, 20.1f, 21f, 19f, 21f)
+            lineTo(5f, 21f)
+            curveTo(3.9f, 21f, 3f, 20.1f, 3f, 19f)
+            lineTo(3f, 5f)
+            curveTo(3f, 3.9f, 3.9f, 3f, 5f, 3f)
+            close()
+            moveTo(7f, 7f)
+            lineTo(17f, 7f)
+            lineTo(17f, 9f)
+            lineTo(7f, 9f)
+            close()
+            moveTo(7f, 11f)
+            lineTo(17f, 11f)
+            lineTo(17f, 13f)
+            lineTo(7f, 13f)
+            close()
+            moveTo(7f, 15f)
+            lineTo(13f, 15f)
+            lineTo(13f, 17f)
+            lineTo(7f, 17f)
+            close()
+        }
+    }
+
+    val info: ImageVector by lazy {
+        icon("info") {
+            moveTo(12f, 2f)
+            curveTo(6.48f, 2f, 2f, 6.48f, 2f, 12f)
+            curveTo(2f, 17.52f, 6.48f, 22f, 12f, 22f)
+            curveTo(17.52f, 22f, 22f, 17.52f, 22f, 12f)
+            curveTo(22f, 6.48f, 17.52f, 2f, 12f, 2f)
+            close()
+            moveTo(11f, 10f)
+            lineTo(13f, 10f)
+            lineTo(13f, 17f)
+            lineTo(11f, 17f)
+            close()
+            moveTo(11f, 6.5f)
+            lineTo(13f, 6.5f)
+            lineTo(13f, 8.5f)
+            lineTo(11f, 8.5f)
+            close()
+        }
+    }
+
     val save: ImageVector by lazy {
         icon("save") {
             moveTo(17f, 3f)

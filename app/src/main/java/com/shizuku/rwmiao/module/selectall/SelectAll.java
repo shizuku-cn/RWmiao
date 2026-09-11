@@ -61,7 +61,7 @@ public final class SelectAll {
         final Field dead = host.findField(unit, "bX");
         final Field owner = host.findField(unit, "bZ");
         final Field attached = host.findField(unit, "cP");
-        final Method allUnits = unit.getDeclaredMethod("bn");
+        final Method allUnits = host.findCompatibleMethod(unit, "bn");
         final Method clearSelection = host.findNoArgMethod(uiClass, "h");
         final Method addSelection = host.findCompatibleMethod(uiClass, "b", unit);
 

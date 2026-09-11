@@ -16,19 +16,20 @@ object ModuleStartupUpdate {
     fun start(context: Context?) {
         if (context == null) return
         val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (!preferences.getBoolean(KEY_UI_AUTO_CHECK_UPDATE, false)) return
+        if (!preferences.getBoolean(KEY_UI_AUTO_CHECK_UPDATE, true)) return
         if (!ModuleUpdateStateBus.begin()) return
 
         ModuleUpdateStateBus.checking()
-        val appContext = context.applicationContext ?: context
         scope.launch {
             try {
-                when (val result = GithubUpdateManager(appContext).checkLatest()) {
+                when (val result = GithubUpdateManager().checkLatest()) {
                     UpdateCheckResult.UpToDate -> ModuleUpdateStateBus.upToDate()
                     is UpdateCheckResult.Available -> ModuleUpdateStateBus.available(
                         result.update.version,
                         result.update.downloadUrl,
-                        result.update.sizeBytes
+                        result.update.sizeBytes,
+                        result.update.releaseUrl,
+                        result.update.releaseNotes
                     )
                     is UpdateCheckResult.Error -> ModuleUpdateStateBus.failed(result.message)
                 }

@@ -70,7 +70,7 @@ public final class Drawing {
     public void install() throws Throwable {
         runtime = new RuntimeAccess();
         Class<?> uiRenderer = loader.loadClass(host.target("gameFramework.f.i"));
-        drawMethod = uiRenderer.getDeclaredMethod("b", float.class);
+        drawMethod = host.findCompatibleMethod(uiRenderer, "b", float.class);
         refreshSettings();
     }
 
@@ -544,7 +544,7 @@ public final class Drawing {
         final Method actionForQueue = actionId == null ? null
                 : host.findCompatibleMethod(unit, "a", actionId);
         final Method productionAction = optionalNoArg(actionBase, "f");
-        final Method allUnits = unit.getDeclaredMethod("bn");
+        final Method allUnits = host.findCompatibleMethod(unit, "bn");
 
         RuntimeAccess() throws Throwable {
             allUnits.setAccessible(true);

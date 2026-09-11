@@ -16,14 +16,19 @@ public final class ModuleUpdateStateBus {
         public final String version;
         public final String downloadUrl;
         public final long sizeBytes;
+        public final String releaseUrl;
+        public final String releaseNotes;
         public final String message;
 
         private Snapshot(Kind kind, String version, String downloadUrl,
-                         long sizeBytes, String message) {
+                         long sizeBytes, String releaseUrl, String releaseNotes,
+                         String message) {
             this.kind = kind;
             this.version = version;
             this.downloadUrl = downloadUrl;
             this.sizeBytes = sizeBytes;
+            this.releaseUrl = releaseUrl;
+            this.releaseNotes = releaseNotes;
             this.message = message;
         }
     }
@@ -34,7 +39,8 @@ public final class ModuleUpdateStateBus {
 
     private static final CopyOnWriteArrayList<Listener> LISTENERS =
             new CopyOnWriteArrayList<>();
-    private static volatile Snapshot state = new Snapshot(Kind.IDLE, "", "", 0L, "");
+    private static volatile Snapshot state =
+            new Snapshot(Kind.IDLE, "", "", 0L, "", "", "");
     private static boolean started;
 
     private ModuleUpdateStateBus() {
@@ -62,19 +68,21 @@ public final class ModuleUpdateStateBus {
     }
 
     public static void checking() {
-        publish(new Snapshot(Kind.CHECKING, "", "", 0L, ""));
+        publish(new Snapshot(Kind.CHECKING, "", "", 0L, "", "", ""));
     }
 
     public static void upToDate() {
-        publish(new Snapshot(Kind.UP_TO_DATE, "", "", 0L, ""));
+        publish(new Snapshot(Kind.UP_TO_DATE, "", "", 0L, "", "", ""));
     }
 
-    public static void available(String version, String downloadUrl, long sizeBytes) {
-        publish(new Snapshot(Kind.AVAILABLE, version, downloadUrl, sizeBytes, ""));
+    public static void available(String version, String downloadUrl, long sizeBytes,
+                                 String releaseUrl, String releaseNotes) {
+        publish(new Snapshot(Kind.AVAILABLE, version, downloadUrl, sizeBytes,
+                releaseUrl, releaseNotes, ""));
     }
 
     public static void failed(String message) {
-        publish(new Snapshot(Kind.FAILED, "", "", 0L, message));
+        publish(new Snapshot(Kind.FAILED, "", "", 0L, "", "", message));
     }
 
     private static void publish(Snapshot next) {

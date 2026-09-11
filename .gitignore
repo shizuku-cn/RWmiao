@@ -30,6 +30,10 @@ work/
 *.aab
 发布/
 tools/action-payload/.build/
+# Local-only static compatibility verifier; never upload it with the module.
+/tools/compat-mapping/verify_variant.py
+/tools/compat-mapping/__pycache__/
+/tools/compat-mapping/*.pyc
 
 # Local signing and proprietary references / 本机签名与专有参考文件
 /config/signing/

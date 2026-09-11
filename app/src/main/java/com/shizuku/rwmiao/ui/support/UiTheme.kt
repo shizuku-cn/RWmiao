@@ -10,12 +10,12 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_BLUE
+import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_CYAN
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_DYNAMIC
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_GREEN
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_ORANGE
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_PINK
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_RED
-import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_CYAN
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_YELLOW
 
 @Composable
@@ -41,6 +41,80 @@ internal fun moduleColorScheme(
     }
 }
 
+private fun ColorScheme.withCompleteLightM3Roles(): ColorScheme {
+    val accent = primary
+    val background = blendM3(Color(0xFFFFFBFE), accent, 0.035f)
+    val surface = blendM3(Color(0xFFFFFBFE), accent, 0.035f)
+    return copy(
+        inversePrimary = primaryContainer,
+        background = background,
+        onBackground = Color(0xFF1A1B1F),
+        surface = surface,
+        onSurface = Color(0xFF1A1B1F),
+        surfaceVariant = blendM3(Color(0xFFE7E0EC), accent, 0.10f),
+        onSurfaceVariant = Color(0xFF46464F),
+        surfaceTint = accent,
+        inverseSurface = blendM3(Color(0xFF313033), accent, 0.10f),
+        inverseOnSurface = Color(0xFFF4EFF4),
+        error = Color(0xFFBA1A1A),
+        onError = Color.White,
+        errorContainer = Color(0xFFFFDAD6),
+        onErrorContainer = Color(0xFF410002),
+        outline = blendM3(Color(0xFF74747D), accent, 0.08f),
+        outlineVariant = blendM3(Color(0xFFC7C5CC), accent, 0.08f),
+        scrim = Color.Black,
+        surfaceBright = blendM3(Color(0xFFFFFBFE), accent, 0.02f),
+        surfaceDim = blendM3(Color(0xFFDED8E1), accent, 0.08f),
+        surfaceContainerLowest = blendM3(Color.White, accent, 0.015f),
+        surfaceContainerLow = blendM3(Color(0xFFF7F2FA), accent, 0.04f),
+        surfaceContainer = blendM3(Color(0xFFF3EDF7), accent, 0.06f),
+        surfaceContainerHigh = blendM3(Color(0xFFECE6F0), accent, 0.07f),
+        surfaceContainerHighest = blendM3(Color(0xFFE6E0E9), accent, 0.08f)
+    )
+}
+
+private fun ColorScheme.withCompleteDarkM3Roles(): ColorScheme {
+    val accent = primary
+    val background = blendM3(Color(0xFF141218), accent, 0.08f)
+    val surface = blendM3(Color(0xFF141218), accent, 0.08f)
+    return copy(
+        inversePrimary = primary,
+        background = background,
+        onBackground = Color(0xFFE6E1E9),
+        surface = surface,
+        onSurface = Color(0xFFE6E1E9),
+        surfaceVariant = blendM3(Color(0xFF49454F), accent, 0.12f),
+        onSurfaceVariant = Color(0xFFCAC4D0),
+        surfaceTint = accent,
+        inverseSurface = blendM3(Color(0xFFE6E1E9), accent, 0.03f),
+        inverseOnSurface = Color(0xFF313033),
+        error = Color(0xFFFFB4AB),
+        onError = Color(0xFF690005),
+        errorContainer = Color(0xFF93000A),
+        onErrorContainer = Color(0xFFFFDAD6),
+        outline = blendM3(Color(0xFF938F99), accent, 0.10f),
+        outlineVariant = blendM3(Color(0xFF49454F), accent, 0.12f),
+        scrim = Color.Black,
+        surfaceBright = blendM3(Color(0xFF3B383E), accent, 0.10f),
+        surfaceDim = blendM3(Color(0xFF141218), accent, 0.08f),
+        surfaceContainerLowest = blendM3(Color(0xFF0F0D13), accent, 0.06f),
+        surfaceContainerLow = blendM3(Color(0xFF1D1B20), accent, 0.08f),
+        surfaceContainer = blendM3(Color(0xFF211F26), accent, 0.10f),
+        surfaceContainerHigh = blendM3(Color(0xFF2B2930), accent, 0.11f),
+        surfaceContainerHighest = blendM3(Color(0xFF36333B), accent, 0.12f)
+    )
+}
+
+private fun blendM3(base: Color, tint: Color, amount: Float): Color {
+    val fraction = amount.coerceIn(0f, 1f)
+    return Color(
+        red = base.red + (tint.red - base.red) * fraction,
+        green = base.green + (tint.green - base.green) * fraction,
+        blue = base.blue + (tint.blue - base.blue) * fraction,
+        alpha = base.alpha + (tint.alpha - base.alpha) * fraction
+    )
+}
+
 private fun greenLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFF006E1C),
     onPrimary = Color.White,
@@ -54,7 +128,7 @@ private fun greenLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFBCEBF1),
     onTertiaryContainer = Color(0xFF001F24)
-)
+).withCompleteLightM3Roles()
 
 private fun greenDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFF6DDF73),
@@ -69,7 +143,7 @@ private fun greenDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF00363B),
     tertiaryContainer = Color(0xFF1F4D52),
     onTertiaryContainer = Color(0xFFBCEBF1)
-)
+).withCompleteDarkM3Roles()
 
 private fun blueLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFF415F91),
@@ -84,7 +158,7 @@ private fun blueLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFFBD8FD),
     onTertiaryContainer = Color(0xFF28132D)
-)
+).withCompleteLightM3Roles()
 
 private fun blueDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFFAAC7FF),
@@ -99,7 +173,7 @@ private fun blueDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF3F2843),
     tertiaryContainer = Color(0xFF573E5B),
     onTertiaryContainer = Color(0xFFFBD8FD)
-)
+).withCompleteDarkM3Roles()
 
 private fun pinkLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFFC2185B),
@@ -114,7 +188,7 @@ private fun pinkLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFFFDCBE),
     onTertiaryContainer = Color(0xFF2E1600)
-)
+).withCompleteLightM3Roles()
 
 private fun pinkDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFFFFB0D0),
@@ -129,7 +203,7 @@ private fun pinkDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF472A0F),
     tertiaryContainer = Color(0xFF5D3F25),
     onTertiaryContainer = Color(0xFFFFDCBE)
-)
+).withCompleteDarkM3Roles()
 
 private fun yellowLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFF6D5F00),
@@ -144,7 +218,7 @@ private fun yellowLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFC2E8C8),
     onTertiaryContainer = Color(0xFF00210D)
-)
+).withCompleteLightM3Roles()
 
 private fun yellowDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFFDBC66E),
@@ -159,7 +233,7 @@ private fun yellowDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF12371F),
     tertiaryContainer = Color(0xFF28512F),
     onTertiaryContainer = Color(0xFFC2E8C8)
-)
+).withCompleteDarkM3Roles()
 
 private fun orangeLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFFA63C00),
@@ -174,7 +248,7 @@ private fun orangeLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFFFE08B),
     onTertiaryContainer = Color(0xFF241A00)
-)
+).withCompleteLightM3Roles()
 
 private fun orangeDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFFFFB596),
@@ -189,7 +263,7 @@ private fun orangeDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF3D3000),
     tertiaryContainer = Color(0xFF594600),
     onTertiaryContainer = Color(0xFFFFE08B)
-)
+).withCompleteDarkM3Roles()
 
 private fun redLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFFBA1A1A),
@@ -204,7 +278,7 @@ private fun redLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFFBE0A6),
     onTertiaryContainer = Color(0xFF251A00)
-)
+).withCompleteLightM3Roles()
 
 private fun redDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFFFFB4AB),
@@ -219,7 +293,7 @@ private fun redDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF3B2F05),
     tertiaryContainer = Color(0xFF534619),
     onTertiaryContainer = Color(0xFFFBE0A6)
-)
+).withCompleteDarkM3Roles()
 
 private fun cyanLightColorScheme(): ColorScheme = lightColorScheme(
     primary = Color(0xFF006874),
@@ -234,7 +308,7 @@ private fun cyanLightColorScheme(): ColorScheme = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFD9E2FF),
     onTertiaryContainer = Color(0xFF0C1B36)
-)
+).withCompleteLightM3Roles()
 
 private fun cyanDarkColorScheme(): ColorScheme = darkColorScheme(
     primary = Color(0xFF4FD8EB),
@@ -249,4 +323,4 @@ private fun cyanDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = Color(0xFF222E4D),
     tertiaryContainer = Color(0xFF394665),
     onTertiaryContainer = Color(0xFFD9E2FF)
-)
+).withCompleteDarkM3Roles()

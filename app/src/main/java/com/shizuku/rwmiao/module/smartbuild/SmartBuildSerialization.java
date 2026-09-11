@@ -22,7 +22,7 @@ import io.github.libxposed.api.XposedInterface;
 
 public final class SmartBuildSerialization {
     private static final String TAG = "RWmiao";
-    private static final String[] ORDER_TYPE_FIELDS = {"a", "f521a"};
+    private static final String[] ORDER_TYPE_FIELDS = {"a"};
     private static final float POINT_EPSILON_SQUARED = 0.01f;
     private static final int DISPATCH_RETRY_TICKS = 180;
 
@@ -200,6 +200,9 @@ public final class SmartBuildSerialization {
 
     private boolean capturePlayerBuild(Object command, Object order) throws Throwable {
         ArrayList<Object> units = localUnits(command);
+        // Serialization distributes a build sequence between multiple
+        // selected builders. A one-builder command is native game behavior
+        // and must never be captured or replayed by this feature.
         if (units.size() < 2) return false;
 
         boolean append = booleanField(command, "e");

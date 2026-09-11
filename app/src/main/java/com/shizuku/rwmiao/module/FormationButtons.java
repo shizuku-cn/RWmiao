@@ -22,6 +22,8 @@ final class FormationButtons {
 
     private XposedInterface.HookHandle renderHook;
 
+    private Field engineInputField;
+    private Field inputPanelField;
     private Field panelEngineField;
     private Field panelGroupsField;
     private Field panelInputField;
@@ -117,8 +119,11 @@ final class FormationButtons {
         try {
             Object engine = host.findEngine(loader);
             if (engine == null) return -1;
-            if (panelEngineField == null) panelEngineField = host.findField(engine.getClass(), "bP");
-            Object panel = panelEngineField.get(engine);
+            if (engineInputField == null) engineInputField = host.findField(engine.getClass(), "bP");
+            Object input = engineInputField.get(engine);
+            if (input == null) return -1;
+            if (inputPanelField == null) inputPanelField = host.findField(input.getClass(), "g");
+            Object panel = inputPanelField.get(input);
             if (panel == null) return -1;
             if (panelGroupsField == null) panelGroupsField = host.findField(panel.getClass(), "aA");
             Object value = panelGroupsField.get(panel);

@@ -10,27 +10,24 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import com.shizuku.rwmiao.ui.main.ModuleInfoApp
-import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_COLOR_MODE
-import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_DYNAMIC_COLOR
 import com.shizuku.rwmiao.config.SettingsContract.KEY_UI_THEME_MODE
 import com.shizuku.rwmiao.config.SettingsContract.KEY_MODULE_LAST_ACTIVE
 import com.shizuku.rwmiao.config.SettingsContract.MODULE_ACTIVE_TIMEOUT_MS
 import com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME
-import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_CYAN
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_DEFAULT
 import com.shizuku.rwmiao.config.SettingsContract.UI_COLOR_DYNAMIC
 import com.shizuku.rwmiao.config.SettingsContract.UI_THEME_SYSTEM
+import com.shizuku.rwmiao.ui.support.readModuleColorMode
 
 open class ModuleInfoActivity : ComponentActivity() {
     private val themeMode = mutableIntStateOf(UI_THEME_SYSTEM)
     private val colorMode = mutableIntStateOf(UI_COLOR_DEFAULT)
-    private val dynamicColor = mutableStateOf(true)
     private val moduleActive = mutableStateOf(false)
     private val themeListener = object : ThemeStateBus.Listener {
-        override fun onThemeChanged(nextMode: Int, nextDynamicColor: Boolean) {
+        override fun onThemeChanged(nextMode: Int, ignoredDynamicColor: Boolean) {
             themeMode.intValue = nextMode
-            dynamicColor.value = nextDynamicColor
-            colorMode.intValue = readColorMode()
+            colorMode.intValue = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .readModuleColorMode()
         }
     }
     private val statusListener = object : ModuleStatusBus.Listener {
@@ -88,28 +85,13 @@ open class ModuleInfoActivity : ComponentActivity() {
     private fun reloadTheme() {
         val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         themeMode.intValue = preferences.getInt(KEY_UI_THEME_MODE, UI_THEME_SYSTEM)
-        colorMode.intValue = readColorMode()
-        dynamicColor.value = colorMode.intValue == UI_COLOR_DYNAMIC
+        colorMode.intValue = preferences.readModuleColorMode()
         IconThemeProvider.applyTheme(
             this,
             themeMode.intValue,
             colorMode.intValue,
-            dynamicColor.value
+            colorMode.intValue == UI_COLOR_DYNAMIC
         )
-    }
-
-    private fun readColorMode(): Int {
-        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val legacyDynamic = preferences.contains(KEY_UI_DYNAMIC_COLOR) &&
-            preferences.getBoolean(KEY_UI_DYNAMIC_COLOR, false)
-        val storedColorMode = if (preferences.contains(KEY_UI_COLOR_MODE)) {
-            preferences.getInt(KEY_UI_COLOR_MODE, UI_COLOR_DEFAULT)
-        } else if (legacyDynamic) {
-            UI_COLOR_DYNAMIC
-        } else {
-            UI_COLOR_DEFAULT
-        }
-        return storedColorMode.coerceIn(UI_COLOR_DEFAULT, UI_COLOR_CYAN)
     }
 
     private fun reloadActivation() {

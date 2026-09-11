@@ -20,7 +20,7 @@ final class FactoryOptimization {
         Class<?> renderer = loader.loadClass(host.target("gameFramework.f.i"));
         Class<?> command = loader.loadClass(host.target("gameFramework.e"));
         Class<?> action = loader.loadClass(host.target("game.units.a.s"));
-        produce = renderer.getDeclaredMethod("a", command, action);
+        produce = host.findCompatibleMethod(renderer, "a", command, action);
         refreshSettings();
     }
 
@@ -54,7 +54,7 @@ private boolean optimizeFactoryCommand(ClassLoader loader, Object command, Objec
     Class<?> factoryClass = loader.loadClass(host.target("game.units.d.s"));
     Class<?> allUnitsClass = loader.loadClass(host.target("gameFramework.ah"));
     Class<?> rendererClass = loader.loadClass(host.target("gameFramework.f.i"));
-    Method visible = rendererClass.getDeclaredMethod("e", unitClass);
+    Method visible = host.findCompatibleMethod(rendererClass, "e", unitClass);
     visible.setAccessible(true);
     Object allUnits = host.findField(allUnitsClass, "et").get(null);
     if (!(allUnits instanceof Iterable)) return false;

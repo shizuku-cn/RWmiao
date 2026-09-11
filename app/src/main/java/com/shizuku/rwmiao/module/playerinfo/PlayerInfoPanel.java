@@ -256,7 +256,7 @@ public final class PlayerInfoPanel {
             gameActivityClass = loader.loadClass(host.target("appFramework.InGameActivity"));
             playerClass = loader.loadClass(host.target("game.p"));
 
-            playersMethod = playerClass.getDeclaredMethod("d");
+            playersMethod = host.findCompatibleMethod(playerClass, "d");
             playersMethod.setAccessible(true);
             incomeMethod = host.findCompatibleMethod(playerClass, "q");
             teamColorMethod = host.findCompatibleMethod(playerClass, "g", int.class);

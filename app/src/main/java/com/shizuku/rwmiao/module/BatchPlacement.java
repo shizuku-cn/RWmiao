@@ -143,7 +143,7 @@ public final class BatchPlacement {
             waypointCountField = host.findField(blockoutClass, "O");
             waypointQueueField = host.findField(blockoutClass, "Q");
             try {
-                waypointTypeField = host.findField(waypointClass, "f521a");
+                waypointTypeField = host.findField(waypointClass, "a");
             } catch (Throwable ignored) {
                 waypointTypeField = null;
             }

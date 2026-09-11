@@ -35,12 +35,19 @@ public final class GameAdapter {
     private final Map<Long,Long> lastDamageSource = new HashMap<>();
     private Object snapshotMap;
     private Object snapshotEngine;
+    private int snapshotTick=-1;
     private final Map<String,PathLayer> pathLayerCache = new HashMap<>();
     private final Set<String> capabilities = new LinkedHashSet<>();
     private final Map<Class<?>, Map<String, Field>> fieldCache = new HashMap<>();
     private final Map<Class<?>, Map<String, Method>> noArgMethodCache = new HashMap<>();
     private final Map<String,Method> argumentMethodCache = new HashMap<>();
     private final Map<String,ActionFacts> actionFactsCache = new HashMap<>();
+    private final Map<Long,ObservedOrder> observedOrders = new HashMap<>();
+    private final Map<Long,ArrayList<IssuedOrder>> pendingScriptOrders = new HashMap<>();
+    private final Map<Long,Map<String,Object>> lastPlayerOrders = new HashMap<>();
+    private final Map<Long,Long> orderRevisions = new HashMap<>();
+    private final Map<String,Boolean> nativeConstructionCache = new HashMap<>();
+    private final Map<String,Boolean> nativeRepairCache = new HashMap<>();
 
     public GameAdapter(RWmiaoModule host, ClassLoader loader) throws Throwable {
         this.host = host;
@@ -53,7 +60,7 @@ public final class GameAdapter {
         localPlayer = host.findField(engine, "bp");
         tick = host.findField(engine, "bu");
         Field networkField=null;Method delivery=null;
-        try{Class<?> networkClass=loader.loadClass(host.target("gameFramework.j.ae"));Class<?> connectionClass=loader.loadClass(host.target("gameFramework.j.c"));networkField=host.findField(engine,"bU");delivery=networkClass.getDeclaredMethod("a",connectionClass,int.class,String.class,String.class);delivery.setAccessible(true);}catch(Throwable ignored){}
+        try{Class<?> networkClass=loader.loadClass(host.target("gameFramework.j.ae"));Class<?> connectionClass=loader.loadClass(host.target("gameFramework.j.c"));networkField=host.findField(engine,"bU");delivery=host.findCompatibleMethod(networkClass,"a",connectionClass,int.class,String.class,String.class);}catch(Throwable ignored){}
         gameNetwork=networkField;deliverLocalMessage=delivery;
         Field registry;
         try { registry = host.findField(unitClass, "bG"); }
@@ -67,8 +74,11 @@ public final class GameAdapter {
         allProjectiles = projectileRegistry;
         Collections.addAll(capabilities, "units.read.all", "unit.health", "unit.shield",
                 "unit.position", "unit.heading", "unit.target", "unit.orders",
+                "unit.repair_state", "unit.repair_targets",
                 "unit.type", "unit.team", "unit.selection", "unit.build_progress",
-                "unit.weapons", "unit.movement.physics", "unit.pathing", "map.info",
+                "unit.weapons", "unit.movement.physics", "unit.pathing", "unit.path_queue", "unit.order_intent",
+                "unit.movement.trajectory", "map.dynamic_route", "map.threat_retreat", "map.info",
+                "unit.construction", "unit.construction.assist", "map.construction_reachability",
                 "map.visibility", "team.resources", "unit.production", "unit.transport",
                 "projectiles.read", "unit.damage_history", "unit.damage_source",
                 "unit.abilities", "unit.ability_cooldown", "unit.production.details",
@@ -81,24 +91,30 @@ public final class GameAdapter {
     }
 
     public GameSnapshot snapshot(Set<String> groups) throws Throwable {
+        return snapshot(groups,null);
+    }
+
+    public GameSnapshot snapshot(Set<String> groups,Set<Long> detailedUnitIds) throws Throwable {
         Object engine = host.findEngine(loader);
         if (engine == null) return new GameSnapshot(-1, false, -1, new ArrayList<>());
         Object me = localPlayer.get(engine);
-        snapshotEngine=engine;snapshotMap=fieldValue(engine,"bI");pathLayerCache.clear();
+        snapshotEngine=engine;snapshotMap=fieldValue(engine,"bI");pathLayerCache.clear();nativeConstructionCache.clear();nativeRepairCache.clear();
         int localTeamId = integer(fieldValue(me, "l"), -1);
         int currentTick = integer(tick.get(engine), -1);
+        snapshotTick=currentTick;
         ArrayList<UnitSnapshot> result = new ArrayList<>();
         Object registry = Modifier.isStatic(allUnits.getModifiers()) ? allUnits.get(null) : allUnits.get(engine);
         if (registry instanceof Iterable) {
             for (Object raw : (Iterable<?>) registry) {
                 if (raw != null && unitClass.isInstance(raw)) {
-                    UnitSnapshot unit = snapshotUnit(raw, me, groups, actionFactsCache);
+                    UnitSnapshot unit = snapshotUnit(raw, me, groups, actionFactsCache,detailedUnitIds);
                     if (unit != null) result.add(unit);
                 }
             }
         }
         boolean all=groups==null||groups.contains("all");
         if(all||groups.contains("damage")){LinkedHashSet<Long> alive=new LinkedHashSet<>();for(UnitSnapshot u:result)alive.add(u.id);previousDurability.keySet().retainAll(alive);lastDamagedTick.keySet().retainAll(alive);lastDamageAmount.keySet().retainAll(alive);lastDamageSource.keySet().retainAll(alive);}
+        if(all||groups.contains("orders")||groups.contains("pathing")||groups.contains("repair")){LinkedHashSet<Long> alive=new LinkedHashSet<>();for(UnitSnapshot u:result)alive.add(u.id);observedOrders.keySet().retainAll(alive);pendingScriptOrders.keySet().retainAll(alive);lastPlayerOrders.keySet().retainAll(alive);orderRevisions.keySet().retainAll(alive);}
         List<Map<String,Object>> projectiles=all||groups.contains("projectiles")?projectileFacts(engine):Collections.emptyList();
         return new GameSnapshot(currentTick, multiplayer(engine), localTeamId, result,
                 all||groups.contains("map")?mapFacts(engine, me):Collections.emptyMap(),
@@ -107,7 +123,8 @@ public final class GameAdapter {
                 projectiles,
                 all||groups.contains("map")?(x,y)->tileFacts(me,x,y):null,
                 all||groups.contains("map")?(x,y)->fogFacts(me,x,y):null,
-                all||groups.contains("map")?(x,y,movement)->pathFacts(x,y,movement):null);
+                all||groups.contains("map")||groups.contains("pathing")||groups.contains("construction")
+                        ?(x,y,movement)->pathFacts(x,y,movement):null);
     }
 
     public Object rawUnit(GameSnapshot snapshot, long id) {
@@ -126,7 +143,74 @@ public final class GameAdapter {
     public Class<?> unitClass() { return unitClass; }
     public Class<?> orderableClass() { return orderableClass; }
     public Set<String> capabilities() { return Collections.unmodifiableSet(capabilities); }
-    public void clearTransientState(){previousDurability.clear();lastDamagedTick.clear();lastDamageAmount.clear();lastDamageSource.clear();snapshotMap=null;snapshotEngine=null;pathLayerCache.clear();}
+    public void clearTransientState(){previousDurability.clear();lastDamagedTick.clear();lastDamageAmount.clear();lastDamageSource.clear();observedOrders.clear();pendingScriptOrders.clear();lastPlayerOrders.clear();orderRevisions.clear();nativeConstructionCache.clear();nativeRepairCache.clear();snapshotMap=null;snapshotEngine=null;snapshotTick=-1;pathLayerCache.clear();}
+
+    /**
+     * Calls the game's own builder-target compatibility check without issuing
+     * an order.  A null result means that this game build does not expose the
+     * compatible native method and the path/relationship fallback must be used.
+     */
+    Boolean nativeConstructionCompatible(UnitSnapshot builder, UnitSnapshot target) {
+        if (builder == null || target == null || builder.raw == null || target.raw == null
+                || !orderableClass.isInstance(builder.raw)) return null;
+        String key=builder.id+":"+target.id;
+        Boolean cached=nativeConstructionCache.get(key);
+        if(cached!=null)return cached;
+        Object result = invoke(builder.raw, "a", new Class[]{unitClass, boolean.class}, target.raw, true);
+        if(!(result instanceof Boolean))return null;
+        Boolean value=(Boolean)result;nativeConstructionCache.put(key,value);return value;
+    }
+
+    Boolean nativeRepairCompatible(UnitSnapshot repairer, UnitSnapshot target) {
+        if(repairer==null||target==null||repairer.raw==null||target.raw==null
+                ||!orderableClass.isInstance(repairer.raw))return null;
+        String key=repairer.id+":"+target.id;
+        Boolean cached=nativeRepairCache.get(key);if(cached!=null)return cached;
+        Object compatible=invoke(repairer.raw,"a",new Class[]{unitClass},target.raw);
+        if(!(compatible instanceof Boolean))return null;
+        Boolean accepted=(Boolean)compatible;nativeRepairCache.put(key,accepted);return accepted;
+    }
+
+    void recordScriptCommand(String scriptId,List<UnitSnapshot> units,String type,Long targetId,
+                             Float x,Float y,long commandId){
+        int issuedTick=currentTick();
+        for(UnitSnapshot unit:units){
+            ArrayList<IssuedOrder> pending=pendingScriptOrders.computeIfAbsent(unit.id,ignored->new ArrayList<>());
+            pending.add(new IssuedOrder(scriptId,normalizeOrder(type),targetId,x,y,commandId,issuedTick));
+            while(pending.size()>8)pending.remove(0);
+        }
+    }
+
+    Map<String,Object> fireSolution(GameSnapshot snapshot,long attackerId,long targetId,int requestedWeapon){
+        LinkedHashMap<String,Object> out=new LinkedHashMap<>();
+        UnitSnapshot attacker=snapshot==null?null:snapshot.get(attackerId),target=snapshot==null?null:snapshot.get(targetId);
+        boolean available=attacker!=null&&target!=null&&attacker.orderable&&!attacker.dead&&!attacker.deleted&&!target.dead&&!target.deleted;
+        out.put("available",available);if(!available)return out;
+        int weaponIndex=requestedWeapon<=0?1:requestedWeapon;
+        float range=attacker.attackRange;Boolean ready=null;float remaining=0f;
+        Object rawWeapons=attacker.extras.get("weapons");
+        if(rawWeapons instanceof List){
+            List<?> weapons=(List<?>)rawWeapons;
+            if(requestedWeapon<=0){
+                float best=-1f;int bestIndex=1;
+                for(int i=0;i<weapons.size();i++){Object row=weapons.get(i);if(!(row instanceof Map))continue;Number value=number(((Map<?,?>)row).get("range"));if(value!=null&&value.floatValue()>best){best=value.floatValue();bestIndex=i+1;}}
+                weaponIndex=bestIndex;
+            }
+            if(weaponIndex>=1&&weaponIndex<=weapons.size()&&weapons.get(weaponIndex-1) instanceof Map){
+                Map<?,?> weapon=(Map<?,?>)weapons.get(weaponIndex-1);Number value=number(weapon.get("range"));if(value!=null)range=value.floatValue();
+                Object readyValue=weapon.get("ready");if(readyValue instanceof Boolean)ready=(Boolean)readyValue;
+                Number reload=number(weapon.get("reload_remaining")),warmup=number(weapon.get("warmup"));
+                if(reload!=null)remaining=Math.max(remaining,reload.floatValue());if(warmup!=null)remaining=Math.max(remaining,warmup.floatValue());
+            }
+        }
+        float dx=attacker.x-target.x,dy=attacker.y-target.y,distance=(float)Math.sqrt(dx*dx+dy*dy),margin=range-distance;
+        Boolean targetable=null;Object nativeValue=invoke(attacker.raw,"a",new Class[]{unitClass,int.class,boolean.class},target.raw,weaponIndex-1,false);
+        if(nativeValue instanceof Boolean)targetable=(Boolean)nativeValue;
+        out.put("weapon_index",weaponIndex);out.put("range",range);out.put("distance",distance);out.put("margin",margin);
+        out.put("reload_remaining",remaining);if(ready!=null)out.put("ready",ready);if(targetable!=null)out.put("targetable",targetable);
+        out.put("can_fire",margin>=0f&&(targetable==null||targetable)&&(ready==null||ready)&&remaining<=0f);
+        out.put("time_until_fire",Math.max(0f,remaining));return out;
+    }
 
     public void localMessage(String message){
         if(message==null||message.trim().isEmpty()||gameNetwork==null||deliverLocalMessage==null)return;
@@ -153,7 +237,7 @@ public final class GameAdapter {
             if (raw == null || !unitClass.isInstance(raw)) return null;
             Object engine = host.findEngine(loader);
             Object me = engine == null ? null : localPlayer.get(engine);
-            return snapshotUnit(raw, me, Collections.singleton("all"), new HashMap<>());
+            return snapshotUnit(raw, me, Collections.singleton("all"), new HashMap<>(),null);
         } catch (Throwable ignored) { return null; }
     }
 
@@ -167,7 +251,7 @@ public final class GameAdapter {
                 if(!isOrderable(candidate)||bool(fieldValue(candidate,"bX"))||bool(fieldValue(candidate,"el"))
                         ||host.relation(me,fieldValue(candidate,"bZ"))!=0||!bool(fieldValue(candidate,"cI")))continue;
                 String id=typeText(invokeNoArg(candidate,"q"),"i");if(wantedId==null||!wantedId.equals(id))continue;
-                UnitSnapshot u=snapshotUnit(candidate,me,new LinkedHashSet<>(java.util.Arrays.asList("identity","selection")),new HashMap<>());
+                UnitSnapshot u=snapshotUnit(candidate,me,new LinkedHashSet<>(java.util.Arrays.asList("identity","selection")),new HashMap<>(),null);
                 if(u!=null&&!u.dead&&!u.deleted)out.add(u);
             }
             if(out.isEmpty()){UnitSnapshot one=snapshotOne(raw);if(one!=null)out.add(one);}
@@ -175,17 +259,23 @@ public final class GameAdapter {
     }
 
     private UnitSnapshot snapshotUnit(Object raw, Object me, Set<String> groups,
-                                      Map<String, ActionFacts> actionFactsCache) {
+                                      Map<String, ActionFacts> actionFactsCache,Set<Long> detailedUnitIds) {
         try {
-            boolean all=groups==null||groups.contains("all"), catalog=groups!=null&&groups.contains("catalog"), position=all||catalog||groups.contains("position")||groups.contains("map"),
-                    health=all||catalog||groups.contains("health")||groups.contains("damage"), selection=all||groups.contains("selection"),
-                    combat=all||catalog||groups.contains("combat")||groups.contains("weapons"),
-                    orders=all||groups.contains("orders")||groups.contains("pathing"), movement=all||groups.contains("movement")||groups.contains("pathing"),
+            long unitId=longValue(fieldValue(raw,"ej"),-1L);
+            boolean lightweight=detailedUnitIds!=null&&!detailedUnitIds.contains(unitId);
+            boolean all=groups==null||groups.contains("all"), catalog=groups!=null&&groups.contains("catalog"), repair=all||groups.contains("repair"),
+                    construction=all||groups.contains("construction"), pathing=all||groups.contains("pathing"),
+                    position=all||catalog||construction||repair||groups.contains("position")||groups.contains("map"),
+                    health=all||catalog||repair||groups.contains("health")||groups.contains("damage"), selection=all||groups.contains("selection"),
+                    combat=all||catalog||repair||groups.contains("combat")||groups.contains("weapons"),
+                    orders=all||repair||groups.contains("orders")||groups.contains("pathing"), movement=all||construction||groups.contains("movement")||groups.contains("pathing"),
                     build=all||groups.contains("build")||groups.contains("production"), actions=all||groups.contains("actions")||groups.contains("abilities")||build||groups.contains("production");
+            if(lightweight){pathing=false;health=false;selection=false;combat=false;orders=false;movement=false;build=false;actions=false;}
             movement=movement||catalog;actions=actions||catalog;
             Object team = fieldValue(raw, "bZ");
+            int relation=host.relation(me,team);
             Object target = combat && orderableClass.isInstance(raw) ? fieldValue(raw, "T") : null;
-            Object carrier = (all||groups.contains("transport")) ? fieldValue(raw, "cP") : null;
+            Object carrier = (all||repair||groups.contains("transport")) ? fieldValue(raw, "cP") : null;
             Object type = invokeNoArg(raw, "q");
             String typeId = typeText(type, "i");
             String typeName = typeText(type, "e");
@@ -198,10 +288,11 @@ public final class GameAdapter {
             int waypointCount = orders && orderableClass.isInstance(raw) ? integer(fieldValue(raw, "O"), 0) : 0;
             Object order = orders && orderableClass.isInstance(raw) ? invokeNoArg(raw, "ap") : null;
             Object orderKind = fieldValue(order, "a");
-            if (orderKind == null) orderKind = fieldValue(order, "f521a");
             Object orderTarget = fieldValue(order, "h");
-            boolean factory = build && factoryClass != null && factoryClass.isInstance(raw);
+            boolean automaticOrder=orders&&order!=null&&bool(fieldValue(order,"m"));
+            boolean factory = (build||construction) && factoryClass != null && factoryClass.isInstance(raw);
             boolean building=bool(invokeNoArg(raw,"bq"));
+            float buildProgress=(build||construction)?decimal(fieldValue(raw,"co"),1f):1f;
             int queueSize = factory ? integer(invokeNoArg(raw, "cW"), 0) : 0;
             ArrayList<String> actionIds = new ArrayList<>(), buildableTypes = new ArrayList<>();
             Map<String,Map<String,Object>> actionDetails = Collections.emptyMap();
@@ -209,11 +300,24 @@ public final class GameAdapter {
             LinkedHashMap<String,Object> extras=new LinkedHashMap<>();
             if(actions&&!actionDetails.isEmpty())extras.put("action_details",new ArrayList<>(actionDetails.values()));
             if(movement) collectMovement(raw,extras,moveSpeed,waypointCount,order);
+            if(construction){
+                boolean unfinished=building&&!bool(fieldValue(raw,"bX"))&&!bool(fieldValue(raw,"el"))&&buildProgress<1.0f;
+                extras.put("is_construction_site",building);extras.put("is_unfinished",unfinished);
+                extras.put("construction_progress",buildProgress);
+                extras.put("construction_state",building?(unfinished?"unfinished":"complete"):"not_building");
+                extras.put("construction_key",unitId+":"+typeId+":"+integer(fieldValue(team,"l"),-1)+":"
+                        +Math.round(decimal(fieldValue(raw,"eq"),0f))+":"+Math.round(decimal(fieldValue(raw,"er"),0f)));
+            }
+            Float orderX=order==null?null:decimalObject(fieldValue(order,"e"));
+            Float orderY=order==null?null:decimalObject(fieldValue(order,"f"));
+            Long orderTargetId=objectId(orderTarget);
+            if(orders)collectOrderFacts(unitId,relation,orderKind==null?null:String.valueOf(orderKind),orderTargetId,orderX,orderY,automaticOrder,
+                    position?decimal(fieldValue(raw,"eq"),0f):0f,position?decimal(fieldValue(raw,"er"),0f):0f,extras);
+            if(pathing)collectPathFacts(raw,waypointCount,order,orderX,orderY,extras);
             if(all||catalog||groups.contains("weapons")) collectWeapons(raw,weaponCount,range,extras);
             if(all||groups.contains("abilities")) collectAbilityDetails(raw,extras);
             if(all||groups.contains("transport")) collectTransport(raw,extras);
             if(build||all||groups.contains("production")) collectProduction(raw,extras,typeId,actionFactsCache);
-            long unitId=longValue(fieldValue(raw,"ej"),-1L);
             if(all||groups.contains("damage")){float durability=decimal(fieldValue(raw,"cw"),0f)+decimal(fieldValue(raw,"cz"),0f);
                 Float old=previousDurability.put(unitId,durability);if(old!=null&&durability+0.001f<old){lastDamagedTick.put(unitId,integer(tickValue(),-1));lastDamageAmount.put(unitId,old-durability);Long source=findRecentDamageSource(unitId);if(source!=null)lastDamageSource.put(unitId,source);}
                 if(lastDamagedTick.containsKey(unitId))extras.put("last_damaged_tick",lastDamagedTick.get(unitId));if(lastDamageAmount.containsKey(unitId))extras.put("last_damage_amount",lastDamageAmount.get(unitId));if(lastDamageSource.containsKey(unitId))extras.put("last_damage_source_id",lastDamageSource.get(unitId));}
@@ -221,20 +325,19 @@ public final class GameAdapter {
             return new UnitSnapshot(
                     longValue(fieldValue(raw, "ej"), -1L), typeId, typeName,
                     integer(fieldValue(team, "l"), -1), string(fieldValue(team, "w")),
-                    host.relation(me, team),
+                    relation,
                     position?decimal(fieldValue(raw, "eq"), 0f):0f, position?decimal(fieldValue(raw, "er"), 0f):0f,
                     position?decimal(fieldValue(raw, "es"), 0f):0f, position?decimal(fieldValue(raw, "ci"), 0f):0f,
                     position?decimal(fieldValue(raw, "cl"), 0f):0f, health?decimal(fieldValue(raw, "cw"), 0f):0f,
                     health?decimal(fieldValue(raw, "cx"), 0f):0f, health?decimal(fieldValue(raw, "cz"), 0f):0f,
-                    health?decimal(fieldValue(raw, "cC"), 0f):0f, build?decimal(fieldValue(raw, "co"), 1f):1f,
+                    health?decimal(fieldValue(raw, "cC"), 0f):0f, buildProgress,
                     bool(fieldValue(raw, "bX")), bool(fieldValue(raw, "el")),
                     selection&&bool(fieldValue(raw, "cI")), carrier != null, orderableClass.isInstance(raw),
                     customClass != null && customClass.isInstance(raw), factory, building,
                     movementType == null ? null : String.valueOf(movementType), range, weaponCount,
                     waypointCount, queueSize, objectId(target), objectId(carrier),
-                    orderKind == null ? null : String.valueOf(orderKind), objectId(orderTarget),
-                    order == null ? null : decimalObject(fieldValue(order, "e")),
-                    order == null ? null : decimalObject(fieldValue(order, "f")), moveSpeed,
+                    orderKind == null ? null : String.valueOf(orderKind), orderTargetId,
+                    orderX, orderY, moveSpeed,
                     actionIds, buildableTypes, extras, raw);
         } catch (Throwable ignored) {
             return null;
@@ -267,12 +370,117 @@ public final class GameAdapter {
         float factor=decimal(fieldValue(raw,"ch"),0f);
         out.put("velocity_x",vx); out.put("velocity_y",vy);
         out.put("real_speed",Math.max((float)Math.sqrt(vx*vx+vy*vy),Math.abs(maxSpeed*factor)));
+        out.put("throttle",factor);
+        out.put("speed_ratio",maxSpeed>0f?Math.min(1f,Math.abs(factor)):0f);
         putNumber(out,"acceleration",invokeNoArg(raw,"A"));
         putNumber(out,"deceleration",invokeNoArg(raw,"B"));
         putNumber(out,"turn_speed",invokeNoArg(raw,"z"));
         out.put("moving",Math.abs(vx)+Math.abs(vy)+Math.abs(factor)>0.0001f);
         out.put("path_pending",waypoints>0||order!=null);
         out.put("path_state",order==null?"idle":waypoints>0?"following":"commanded");
+    }
+
+    private void collectPathFacts(Object raw,int waypointCount,Object current,Float targetX,Float targetY,
+                                  Map<String,Object> out){
+        ArrayList<Map<String,Object>> points=new ArrayList<>();
+        Object queue=fieldValue(raw,"Q");
+        if(queue!=null&&queue.getClass().isArray()){
+            int count=Math.max(0,Math.min(16,Math.min(waypointCount,Array.getLength(queue))));
+            for(int i=0;i<count;i++){
+                Object order=Array.get(queue,i);Float x=decimalObject(fieldValue(order,"e")),y=decimalObject(fieldValue(order,"f"));
+                if(x==null||y==null)continue;
+                LinkedHashMap<String,Object> point=new LinkedHashMap<>();point.put("x",x);point.put("y",y);point.put("index",i+1);
+                String kind=String.valueOf(fieldValue(order,"a"));if(order!=null)point.put("order",kind);
+                Long id=objectId(fieldValue(order,"h"));if(id!=null)point.put("target_id",id);points.add(point);
+            }
+        }
+        if(points.isEmpty()&&targetX!=null&&targetY!=null){LinkedHashMap<String,Object> point=new LinkedHashMap<>();point.put("x",targetX);point.put("y",targetY);point.put("index",1);points.add(point);}
+        out.put("path_available",!points.isEmpty());out.put("path_points",points);
+        if(!points.isEmpty()){
+            Map<String,Object> next=points.get(0),last=points.get(points.size()-1);
+            out.put("path_next_x",next.get("x"));out.put("path_next_y",next.get("y"));
+            out.put("next_waypoint_x",next.get("x"));out.put("next_waypoint_y",next.get("y"));
+            out.put("path_target_x",last.get("x"));out.put("path_target_y",last.get("y"));
+        }
+    }
+
+    private void collectOrderFacts(long unitId,int relation,String kind,Long targetId,Float x,Float y,boolean automaticOrder,
+                                   float unitX,float unitY,Map<String,Object> out){
+        int now=snapshotTick;String normalized=normalizeOrder(kind);String signature=orderSignature(normalized,targetId,x,y)+"|"+automaticOrder;
+        ObservedOrder previous=observedOrders.get(unitId);boolean changed=previous==null||!signature.equals(previous.signature);
+        String source=previous==null?"game":previous.source,scriptId=previous==null?null:previous.scriptId;
+        Long commandId=previous==null?null:previous.commandId;int issuedTick=previous==null?now:previous.issuedTick;
+        if(changed){
+            IssuedOrder issued=matchIssued(unitId,normalized,targetId,x,y,now);
+            if(issued!=null){source="script";scriptId=issued.scriptId;commandId=issued.commandId;issuedTick=issued.tick;}
+            else{boolean interruptedScript=kind==null&&previous!=null&&"script".equals(previous.source)
+                    &&previous.x!=null&&previous.y!=null&&(previous.x-unitX)*(previous.x-unitX)+(previous.y-unitY)*(previous.y-unitY)>400f;
+                source=unmatchedOrderSource(relation,kind,automaticOrder,interruptedScript);scriptId=null;commandId=null;issuedTick=now;}
+            long revision=orderRevisions.getOrDefault(unitId,0L)+1L;orderRevisions.put(unitId,revision);
+            if("player".equals(source)){
+                LinkedHashMap<String,Object> player=new LinkedHashMap<>();player.put("type",kind);player.put("revision",revision);player.put("issued_tick",issuedTick);
+                if(targetId!=null)player.put("target_id",targetId);if(x!=null)player.put("x",x);if(y!=null)player.put("y",y);lastPlayerOrders.put(unitId,player);
+            }
+        }
+        long revision=orderRevisions.getOrDefault(unitId,0L);
+        observedOrders.put(unitId,new ObservedOrder(signature,source,scriptId,commandId,issuedTick,x,y));
+        out.put("order_revision",revision);out.put("order_changed",changed);out.put("order_source",source);out.put("order_automatic",automaticOrder);out.put("order_issued_tick",issuedTick);
+        if(commandId!=null)out.put("order_command_id",commandId);if(scriptId!=null)out.put("order_script_id",scriptId);
+        Map<String,Object> lastPlayer=lastPlayerOrders.get(unitId);if(lastPlayer!=null)out.put("last_player_order",new LinkedHashMap<>(lastPlayer));
+        if(x!=null&&y!=null){out.put("move_destination_x",x);out.put("move_destination_y",y);out.put("next_waypoint_x",x);out.put("next_waypoint_y",y);out.put("desired_heading",(float)Math.toDegrees(Math.atan2(y-unitY,x-unitX)));}
+        if(targetId!=null&&normalized.contains("attack"))out.put("chasing_target_id",targetId);
+        String intent=intentType(normalized);
+        out.put("intent_type",intent);out.put("intent_target_id",targetId);out.put("intent_target_role",intentRole(intent));
+        boolean repairing="repair".equals(intent)&&targetId!=null;
+        out.put("is_repairing",repairing);out.put("repair_target_id",repairing?targetId:null);out.put("repair_automatic",repairing&&automaticOrder);
+        boolean chasing="chase".equals(intent),protecting="protect".equals(intent),building="build".equals(intent),reclaiming="reclaim".equals(intent);
+        out.put("is_chasing",chasing&&targetId!=null);out.put("chase_target_id",chasing?targetId:null);
+        out.put("is_protecting",protecting&&targetId!=null);out.put("protect_target_id",protecting?targetId:null);
+        out.put("is_building_order",building);out.put("build_target_id",building?targetId:null);
+        out.put("is_reclaiming",reclaiming&&targetId!=null);out.put("reclaim_target_id",reclaiming?targetId:null);
+    }
+
+    static String unmatchedOrderSource(int relation,String kind,boolean automaticOrder,boolean interruptedScript){
+        if(automaticOrder)return "game";
+        return relation==0&&(kind!=null||interruptedScript)?"player":"game";
+    }
+
+    private static String intentType(String normalized){
+        if(normalized==null||normalized.isEmpty())return "idle";
+        if(normalized.contains("attack")||normalized.contains("chase")||normalized.contains("follow"))return "chase";
+        if(normalized.contains("guard")||normalized.contains("protect")||normalized.contains("defend"))return "protect";
+        if(normalized.contains("build")||normalized.contains("construct"))return "build";
+        if(normalized.contains("reclaim")||normalized.contains("salvage"))return "reclaim";
+        if(normalized.contains("repair"))return "repair";
+        if(normalized.contains("patrol"))return "patrol";
+        if(normalized.contains("move")||normalized.contains("waypoint"))return "move";
+        if(normalized.contains("stop"))return "stop";
+        return normalized;
+    }
+    private static String intentRole(String intent){
+        if("chase".equals(intent))return "attack";if("protect".equals(intent))return "guard";
+        if("build".equals(intent))return "construct";if("reclaim".equals(intent))return "reclaim";
+        if("repair".equals(intent))return "repair";return intent;
+    }
+
+    private IssuedOrder matchIssued(long unitId,String kind,Long targetId,Float x,Float y,int now){
+        ArrayList<IssuedOrder> pending=pendingScriptOrders.get(unitId);if(pending==null)return null;IssuedOrder matched=null;
+        for(int i=pending.size()-1;i>=0;i--){IssuedOrder issued=pending.get(i);if(now-issued.tick>120){pending.remove(i);continue;}if(issued.matches(kind,targetId,x,y)){matched=issued;pending.remove(i);break;}}
+        if(pending.isEmpty())pendingScriptOrders.remove(unitId);return matched;
+    }
+
+    private static String normalizeOrder(String value){if(value==null)return"";String lower=value.toLowerCase(java.util.Locale.ROOT);StringBuilder out=new StringBuilder(lower.length());for(int i=0;i<lower.length();i++){char c=lower.charAt(i);if(c>='a'&&c<='z')out.append(c);}return out.toString();}
+    private static String orderSignature(String kind,Long targetId,Float x,Float y){return kind+'|'+String.valueOf(targetId)+'|'+quantize(x)+'|'+quantize(y);}
+    private static int quantize(Float value){return value==null?Integer.MIN_VALUE:Math.round(value*2f);}
+
+    private static final class IssuedOrder{
+        final String scriptId,type;final Long targetId;final Float x,y;final long commandId;final int tick;
+        IssuedOrder(String scriptId,String type,Long targetId,Float x,Float y,long commandId,int tick){this.scriptId=scriptId;this.type=type;this.targetId=targetId;this.x=x;this.y=y;this.commandId=commandId;this.tick=tick;}
+        boolean matches(String kind,Long observedTarget,Float observedX,Float observedY){if(!type.equals(kind))return false;if(targetId!=null||observedTarget!=null)return targetId!=null&&targetId.equals(observedTarget);if(x==null||y==null||observedX==null||observedY==null)return true;float dx=x-observedX,dy=y-observedY;return dx*dx+dy*dy<=64f;}
+    }
+    private static final class ObservedOrder{
+        final String signature,source,scriptId;final Long commandId;final int issuedTick;final Float x,y;
+        ObservedOrder(String signature,String source,String scriptId,Long commandId,int issuedTick,Float x,Float y){this.signature=signature;this.source=source;this.scriptId=scriptId;this.commandId=commandId;this.issuedTick=issuedTick;this.x=x;this.y=y;}
     }
 
     private void collectWeapons(Object raw, int count, float defaultRange, Map<String,Object> out) {
@@ -450,8 +658,7 @@ public final class GameAdapter {
 
     private Object invoke(Object object,String name,Class<?>[] types,Object...args){
         if(object==null)return null;StringBuilder keyBuilder=new StringBuilder(object.getClass().getName()).append('#').append(name);for(Class<?> t:types)keyBuilder.append(':').append(t.getName());String key=keyBuilder.toString();
-        try{Method cached=argumentMethodCache.get(key);if(cached!=null)return cached.invoke(object,args);Class<?> c=object.getClass();
-            while(c!=null)try{Method m=c.getDeclaredMethod(name,types);m.setAccessible(true);argumentMethodCache.put(key,m);return m.invoke(object,args);}catch(NoSuchMethodException e){c=c.getSuperclass();}
+        try{Method cached=argumentMethodCache.get(key);if(cached!=null)return cached.invoke(object,args);Method m=host.findCompatibleMethod(object.getClass(),name,types);if(m!=null){argumentMethodCache.put(key,m);return m.invoke(object,args);}
         }catch(Throwable ignored){}return null;
     }
     private Object tickValue(){try{Object engine=host.findEngine(loader);return engine==null?null:tick.get(engine);}catch(Throwable ignored){return null;}}

@@ -264,7 +264,9 @@ internal fun ThresholdRow(
                 text = filtered
                 filtered.toIntOrNull()?.let { onValue(it.coerceIn(1, 200)) }
             },
-            modifier = Modifier.widthIn(min = 86.dp, max = 110.dp),
+            modifier = Modifier
+                .widthIn(min = 86.dp, max = 110.dp)
+                .heightIn(min = 56.dp),
             singleLine = true,
             label = { Text("阈值") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
@@ -274,11 +276,19 @@ internal fun ThresholdRow(
 
 @Composable
 internal fun PlayerFilter(title: String, selected: Int, onSelected: (Int) -> Unit) {
-    Column {
-        Text(title, style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(6.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            modifier = Modifier.width(68.dp),
+            style = MaterialTheme.typography.labelLarge
+        )
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf("仅自己" to 0, "仅敌人" to 1, "所有人" to 2).forEach { (label, value) ->
@@ -303,11 +313,19 @@ internal fun PlayerFilter(title: String, selected: Int, onSelected: (Int) -> Uni
 
 @Composable
 internal fun PlayerFilterWithAlly(title: String, selected: Int, onSelected: (Int) -> Unit) {
-    Column {
-        Text(title, style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(6.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            modifier = Modifier.width(68.dp),
+            style = MaterialTheme.typography.labelLarge
+        )
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf(
@@ -338,10 +356,19 @@ internal fun PlayerFilterWithAlly(title: String, selected: Int, onSelected: (Int
 @Composable
 internal fun UnitTypeFilter(mask: Int, onMask: (Int) -> Unit) {
     val names = listOf("建筑" to 1, "陆军" to 2, "海军" to 4, "空军" to 8, "悬浮" to 16)
-    Column {
-        Text("单位类型", style = MaterialTheme.typography.labelLarge)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "单位类型",
+            modifier = Modifier.width(68.dp),
+            style = MaterialTheme.typography.labelLarge
+        )
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             names.forEach { (name, bit) ->
@@ -376,7 +403,7 @@ internal fun ColorEditor(
 ) {
     var showPicker by remember { mutableStateOf(false) }
     Row(
-        modifier = modifier.padding(top = 8.dp),
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
