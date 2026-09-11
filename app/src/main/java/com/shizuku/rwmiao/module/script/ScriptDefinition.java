@@ -13,6 +13,7 @@ public final class ScriptDefinition {
     public final int api;
     public final String id;
     public final String name;
+    public final String description;
     public final List<String> unitTypes;
     private final Set<String> acceptedUnitTypes;
     private final boolean acceptsAllUnits;
@@ -20,7 +21,7 @@ public final class ScriptDefinition {
     public final List<ScriptSetting> settings;
     public final String sourceName;
 
-    ScriptDefinition(int api, String id, String name, List<String> units,
+    ScriptDefinition(int api, String id, String name, String description, List<String> units,
                      List<String> dataGroups, List<ScriptSetting> settings, String sourceName) throws IOException {
         if (api != 1) throw new IOException("仅支持 api=1，当前为 " + api);
         if (id == null || !id.matches("[A-Za-z0-9_.-]{1,64}"))
@@ -33,6 +34,7 @@ public final class ScriptDefinition {
         this.api = api;
         this.id = id;
         this.name = name == null || name.trim().isEmpty() ? id : name.trim();
+        this.description = description == null ? "" : description.trim();
         this.unitTypes = Collections.unmodifiableList(normalized);
         LinkedHashSet<String> acceptedTypes=new LinkedHashSet<>(normalized);
         this.acceptsAllUnits=acceptedTypes.contains("All")||acceptedTypes.contains("*");

@@ -135,26 +135,67 @@ object RuntimePanels {
     interface ScriptSettingsCallback { fun onApply(values: Array<String>) }
 
     @JvmStatic
-    fun showScriptDeleteConfirmation(
+    fun showScriptDetails(
         activity: Activity,
         scriptName: String,
+        description: String,
+        units: String
+    ): Dialog = showDialog(activity, 0.82f, 0f) { dialog ->
+        RuntimeDialogSurface(
+            title = "脚本详情",
+            onDismiss = { dialog.dismiss() },
+            wrapContent = true,
+            body = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ScriptDetailField("脚本名", scriptName)
+                    ScriptDetailField("脚本描述", description.ifBlank { "暂无描述" })
+                    ScriptDetailField("作用兵种", units.ifBlank { "未指定" })
+                }
+            },
+            actions = {
+                TextButton(onClick = { dialog.dismiss() }) { Text("关闭") }
+            }
+        )
+    }
+
+    @JvmStatic
+    fun showScriptBatchDeleteConfirmation(
+        activity: Activity,
+        scriptNames: List<String>,
         onConfirm: Runnable
-    ): Dialog = showDialog(activity, 0.72f, 0f) { dialog ->
+    ): Dialog = showDialog(activity, 0.82f, 0f) { dialog ->
         RuntimeDialogSurface(
             title = "删除脚本",
             onDismiss = { dialog.dismiss() },
             wrapContent = true,
             body = {
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 18.dp),
-                    verticalArrangement = Arrangement.Center
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("确定删除“$scriptName”吗？", style = MaterialTheme.typography.bodyLarge)
-                    Spacer(Modifier.height(6.dp))
+                    Text("是否删除以下脚本？", style = MaterialTheme.typography.bodyLarge)
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 240.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        scriptNames.forEach { name ->
+                            Text("• $name", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                     Text(
                         "删除后无法恢复。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.error
                     )
                 }
             },
@@ -741,6 +782,18 @@ private fun RuntimeTheme(activity: Activity, content: @Composable () -> Unit) {
     }
     val scheme = moduleColorScheme(preferences.readModuleColorMode(), dark, activity)
     MaterialTheme(colorScheme = scheme, content = content)
+}
+
+@Composable
+private fun ScriptDetailField(title: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(value, style = MaterialTheme.typography.bodyLarge)
+    }
 }
 
 @Composable

@@ -523,28 +523,36 @@ private fun LinkRow(
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = { Text(description) },
-        leadingContent = {
-            if (letter == null) {
-                Icon(Icons.github, contentDescription = null)
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(
-                            MaterialTheme.colorScheme.secondaryContainer,
-                            CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        letter,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                }
-            }
-        },
+        leadingContent = { LinkIcon(letter) },
         trailingContent = { Icon(Icons.chevronRight, contentDescription = null) },
         modifier = Modifier.clickable(onClick = onClick)
     )
+}
+
+@Composable
+private fun LinkIcon(letter: String?) {
+    if (letter == null) {
+        Box(
+            modifier = Modifier.size(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.github, contentDescription = null)
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .background(
+                    MaterialTheme.colorScheme.secondaryContainer,
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                letter,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
 }

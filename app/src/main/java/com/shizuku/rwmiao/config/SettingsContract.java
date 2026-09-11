@@ -41,6 +41,7 @@ public final class SettingsContract {
     public static final String KEY_SHOW_SMART_PATH_ACTION = "showSmartPathAction";
     public static final String KEY_SCRIPTS_MASTER = "scriptsMaster";
     public static final String KEY_SCRIPT_ENABLED_PREFIX = "scriptEnabled.";
+    public static final String KEY_SCRIPT_ORDER = "scriptOrder";
     public static final String KEY_SMART_PATHING_THRESHOLD = "smartPathingThreshold";
     public static final int DEFAULT_SMART_PATHING_THRESHOLD = 10;
     public static final String KEY_RANGE_PLAYER_FILTER = "playerFilter";

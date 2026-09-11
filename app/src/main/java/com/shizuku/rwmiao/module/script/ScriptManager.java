@@ -39,6 +39,7 @@ import java.util.zip.ZipFile;
 import io.github.libxposed.api.XposedInterface;
 
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_SCRIPT_ENABLED_PREFIX;
+import static com.shizuku.rwmiao.config.SettingsContract.KEY_SCRIPT_ORDER;
 import static com.shizuku.rwmiao.config.SettingsContract.KEY_SCRIPTS_MASTER;
 import static com.shizuku.rwmiao.config.SettingsContract.PREFS_NAME;
 
@@ -48,10 +49,10 @@ public final class ScriptManager {
     private static final int MAX_SOURCE_BYTES = 256 * 1024;
     private static final String SETTING_PREFIX="rwmiao_script_setting_";
     public static final class Record {
-        public final String id, name, fileName, units;
+        public final String id, name, description, units;
         public final boolean enabled, hasSettings;
         Record(ScriptDefinition d, boolean enabled) {
-            id=d.id; name=d.name; fileName=d.sourceName; units=join(d.unitTypes); this.enabled=enabled;hasSettings=!d.settings.isEmpty();
+            id=d.id; name=d.name; description=d.description; units=join(d.unitTypes); this.enabled=enabled;hasSettings=!d.settings.isEmpty();
         }
         static String join(List<String> values) { StringBuilder b=new StringBuilder();for(String v:values){if(b.length()>0)b.append(", ");b.append(v);}return b.toString(); }
     }
@@ -157,6 +158,17 @@ public final class ScriptManager {
     public void setEnabled(String id,boolean enabled){synchronized(lock){enabledCache.put(id,enabled);if(!enabled){unitBindings.remove(id);unitGroups.remove(id);}}if(context!=null)preferences().edit().putBoolean(KEY_SCRIPT_ENABLED_PREFIX+id,enabled).apply();refreshSettings();host.refreshScriptSelectionAction();}
     public boolean resume(String id){synchronized(lock){RuntimeScript runtime=scripts.get(id);if(runtime==null)return false;runtime.program.resume();return true;}}
     public List<Record> records(){synchronized(lock){ArrayList<Record> out=new ArrayList<>();for(RuntimeScript r:scripts.values())out.add(new Record(r.definition(),isEnabled(r.definition().id)));return out;}}
+    public void reorder(List<String> orderedIds){
+        if(orderedIds==null||orderedIds.isEmpty())return;
+        synchronized(lock){
+            LinkedHashMap<String,RuntimeScript> reordered=new LinkedHashMap<>();
+            for(String id:orderedIds){RuntimeScript runtime=scripts.get(id);if(runtime!=null)reordered.put(id,runtime);}
+            for(Map.Entry<String,RuntimeScript> entry:scripts.entrySet())reordered.putIfAbsent(entry.getKey(),entry.getValue());
+            scripts.clear();scripts.putAll(reordered);
+        }
+        saveScriptOrder();
+        notifyUiChanged();
+    }
     public void delete(String id){
         if(id==null||id.isEmpty())return;
         try{
@@ -169,6 +181,7 @@ public final class ScriptManager {
                 unitBindings.remove(id);unitGroups.remove(id);enabledCache.remove(id);settingCache.remove(id);
             }
             if(context!=null){SharedPreferences.Editor editor=preferences().edit().remove(KEY_SCRIPT_ENABLED_PREFIX+id);for(ScriptSetting setting:removed.definition().settings)editor.remove(settingKey(id,setting.key));editor.apply();}
+            saveScriptOrder();
             directoryStamp=Math.max(directory.lastModified(),0L);
         }catch(Throwable t){Log.e(TAG,"Unable to delete script: "+id,t);}
         finally{
@@ -305,7 +318,23 @@ public final class ScriptManager {
         LinkedHashMap<String,RuntimeScript> next=new LinkedHashMap<>();long stamp=0;
         for(File file:files){stamp=Math.max(stamp,file.lastModified());try{LuaProgram program=LuaProgram.compile(read(new FileInputStream(file)),file.getName());if(next.containsKey(program.definition.id))throw new IOException("重复脚本 id: "+program.definition.id);next.put(program.definition.id,new RuntimeScript(program));}
             catch(Throwable t){Log.e(TAG,"Script rejected, retaining previous VM when possible: "+file.getName(),t);synchronized(lock){for(RuntimeScript old:scripts.values())if(old.definition().sourceName.equals(file.getName()))next.put(old.definition().id,old);}}}
+        applyStoredOrder(next);
         synchronized(lock){scripts.clear();scripts.putAll(next);settingCache.clear();if(unitBindings.keySet().retainAll(next.keySet()))hookStateDirty=true;unitGroups.keySet().retainAll(next.keySet());}directoryStamp=Math.max(stamp,directory.lastModified());loaded=true;
+    }
+    private void applyStoredOrder(LinkedHashMap<String,RuntimeScript> next){
+        if(context==null||next.size()<2)return;
+        String stored=preferences().getString(KEY_SCRIPT_ORDER,"");
+        if(stored==null||stored.isEmpty())return;
+        LinkedHashMap<String,RuntimeScript> ordered=new LinkedHashMap<>();
+        for(String id:stored.split("\\n")){RuntimeScript runtime=next.get(id.trim());if(runtime!=null)ordered.put(id.trim(),runtime);}
+        for(Map.Entry<String,RuntimeScript> entry:next.entrySet())ordered.putIfAbsent(entry.getKey(),entry.getValue());
+        next.clear();next.putAll(ordered);
+    }
+    private void saveScriptOrder(){
+        if(context==null)return;
+        StringBuilder order=new StringBuilder();
+        synchronized(lock){for(String id:scripts.keySet()){if(order.length()>0)order.append('\n');order.append(id);}}
+        preferences().edit().putString(KEY_SCRIPT_ORDER,order.toString()).apply();
     }
     private void maybeReload(){long stamp=directory.lastModified();File[] files=directory.listFiles((d,n)->n.toLowerCase().endsWith(".lua"));if(files!=null)for(File f:files)stamp=Math.max(stamp,f.lastModified());if(stamp!=directoryStamp)try{reload();}catch(Throwable t){Log.e(TAG,"Hot reload failed",t);}}
     private SharedPreferences preferences(){return context.getSharedPreferences(PREFS_NAME,Context.MODE_PRIVATE);}

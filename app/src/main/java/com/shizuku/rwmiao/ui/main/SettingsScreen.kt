@@ -25,7 +25,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -74,7 +73,7 @@ internal fun SettingsScreen(page: SettingsPage) {
     val auxiliaryListState = rememberLazyListState()
     val drawListState = rememberLazyListState()
     val environmentListState = rememberLazyListState()
-    val scriptScrollState = rememberScrollState()
+    val scriptListState = rememberLazyListState()
     val preferencesListState = rememberLazyListState()
     val menu = remember {
         listOf(
@@ -102,10 +101,11 @@ internal fun SettingsScreen(page: SettingsPage) {
         0 -> auxiliaryListState
         1 -> drawListState
         2 -> environmentListState
+        3 -> scriptListState
         5 -> preferencesListState
         else -> null
     }
-    val contentScrolled = if(selectedPage==3)scriptScrollState.value>0 else activeListState?.let {
+    val contentScrolled = activeListState?.let {
         it.firstVisibleItemIndex > 0 || it.firstVisibleItemScrollOffset > 0
     } == true
 
@@ -230,7 +230,7 @@ internal fun SettingsScreen(page: SettingsPage) {
                             0 -> AuxiliaryPage(state, auxiliaryListState) { state = it }
                             1 -> DrawPage(state, drawListState) { state = it }
                             2 -> EnvironmentPage(page, environmentListState)
-                            3 -> ScriptPage(page, scriptScrollState)
+                            3 -> ScriptPage(page, scriptListState)
                             5 -> Preferences(
                                 page = page,
                                 settings = uiPreferences,

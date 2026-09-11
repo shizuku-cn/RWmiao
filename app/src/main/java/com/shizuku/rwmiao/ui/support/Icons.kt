@@ -2,6 +2,8 @@ package com.shizuku.rwmiao.ui.support
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathBuilder
 import androidx.compose.ui.graphics.PathFillType
@@ -343,6 +345,17 @@ internal object Icons {
         }
     }
 
+    val reorder: ImageVector by lazy {
+        icon("reorder") {
+            moveTo(5f, 4f); lineTo(8f, 4f); lineTo(8f, 7f); lineTo(5f, 7f); close()
+            moveTo(16f, 4f); lineTo(19f, 4f); lineTo(19f, 7f); lineTo(16f, 7f); close()
+            moveTo(5f, 10.5f); lineTo(8f, 10.5f); lineTo(8f, 13.5f); lineTo(5f, 13.5f); close()
+            moveTo(16f, 10.5f); lineTo(19f, 10.5f); lineTo(19f, 13.5f); lineTo(16f, 13.5f); close()
+            moveTo(5f, 17f); lineTo(8f, 17f); lineTo(8f, 20f); lineTo(5f, 20f); close()
+            moveTo(16f, 17f); lineTo(19f, 17f); lineTo(19f, 20f); lineTo(16f, 20f); close()
+        }
+    }
+
     val settings: ImageVector by lazy {
         icon("settings") {
             moveTo(4f, 6f); lineTo(20f, 6f); lineTo(20f, 8f); lineTo(4f, 8f); close()
@@ -423,6 +436,49 @@ internal object Icons {
             curveTo(24f, 5.67f, 18.63f, 0.3f, 12f, 0.3f)
             close()
         }
+    }
+
+    val scriptDetails: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "scriptDetails",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null,
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 22f)
+                curveTo(14.76f, 22f, 17.26f, 20.88f, 19.07f, 19.07f)
+                curveTo(20.88f, 17.26f, 22f, 14.76f, 22f, 12f)
+                curveTo(22f, 9.24f, 20.88f, 6.74f, 19.07f, 4.93f)
+                curveTo(17.26f, 3.12f, 14.76f, 2f, 12f, 2f)
+                curveTo(9.24f, 2f, 6.74f, 3.12f, 4.93f, 4.93f)
+                curveTo(3.12f, 6.74f, 2f, 9.24f, 2f, 12f)
+                curveTo(2f, 14.76f, 3.12f, 17.26f, 4.93f, 19.07f)
+                curveTo(6.74f, 20.88f, 9.24f, 22f, 12f, 22f)
+                close()
+                moveTo(12.25f, 17f)
+                lineTo(12.25f, 10f)
+                lineTo(11.75f, 10f)
+                lineTo(11.25f, 10f)
+                moveTo(10.5f, 17f)
+                lineTo(14f, 17f)
+            }
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(13.25f, 6.75f)
+                curveTo(13.25f, 7.44f, 12.69f, 8f, 12f, 8f)
+                curveTo(11.31f, 8f, 10.75f, 7.44f, 10.75f, 6.75f)
+                curveTo(10.75f, 6.06f, 11.31f, 5.5f, 12f, 5.5f)
+                curveTo(12.69f, 5.5f, 13.25f, 6.06f, 13.25f, 6.75f)
+                close()
+            }
+        }.build()
     }
 
     val refresh: ImageVector by lazy {

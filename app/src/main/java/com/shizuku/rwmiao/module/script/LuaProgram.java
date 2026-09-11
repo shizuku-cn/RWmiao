@@ -73,7 +73,8 @@ final class LuaProgram {
                     LuaValue unitsValue = first(arg, "units", "unit", "self");
                     metadata[0] = new ScriptDefinition(arg.get("api").optint(1),
                             arg.get("id").optjstring(strip(sourceName)),
-                            arg.get("name").optjstring(null), strings(unitsValue),
+                            arg.get("name").optjstring(null),
+                            arg.get("description").optjstring(""), strings(unitsValue),
                             strings(arg.get("data")), settings(arg.get("settings")), sourceName);
                 } catch (IOException e) { throw new LuaError(e.getMessage()); }
                 return LuaValue.NONE;

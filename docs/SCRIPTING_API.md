@@ -18,6 +18,7 @@ rw.script{
   api=1,
   id="example",
   name="示例",
+  description="示例脚本描述",
   units={"unitTypeA", "unitTypeB"},
   data={"identity", "team", "position", "orders"},
   settings={}
