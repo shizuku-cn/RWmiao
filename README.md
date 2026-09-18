@@ -1,11 +1,9 @@
 # RWmiao
 
-模块因为安全原因暂时停止开源，版本稳定后将恢复开源。
+模块因为安全原因暂时停止开源，版本稳定后将恢复开源到此仓库，因此现在点个星标也是很有必要的！！！
 
-Module source is temporarily closed for security reasons. Open-source distribution will resume after the version is stable.
+您仍可以在此仓库的Releases页获取最新版本。
 
-## 获取版本
+您仍可以在此仓库提交Issue进行bug反馈&新功能建议。
 
-已发布版本和 APK 仍通过本仓库的 [Releases](https://github.com/shizuku-cn/RWmiao/releases) 提供。模块的检查更新功能继续使用本仓库的 Releases API。
-
-Published versions and APK assets remain available through this repository's [Releases](https://github.com/shizuku-cn/RWmiao/releases). The module update checker continues to use this repository's Releases API.
+有意协同开发此项目者，可在模块页内部通过加入QQ群或访问作者Bilibili主页的方式联系作者。
